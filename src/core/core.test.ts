@@ -140,7 +140,10 @@ describe('validation', () => {
 
 describe('elevation', () => {
   const levelOf = (p: { uid: string }, all: ReturnType<typeof placeChain>['pieces'], port: string) =>
-    worldPorts(cat, all.find((x) => x.uid === p.uid)!).find((q) => q.port === port)!.z;
+    worldPorts(
+      cat,
+      all.find((x) => x.uid === p.uid)!,
+    ).find((q) => q.port === port)!.z;
 
   it('AL turns left and AR turns right while climbing, by one curve each', () => {
     const al = placeChain(cat, startPose(), [step('AL')]);
@@ -454,6 +457,78 @@ describe('kits and inventory', () => {
   });
 });
 
+describe('earlier track generations', () => {
+  const closes = (code: string, n: number) => {
+    const { end } = placeChain(cat, startPose(), Array(n).fill(step(code)));
+    expect(Math.hypot(end.x, end.y), code).toBeLessThan(1e-6);
+    expect(Math.round(end.dir) % 360, code).toBe(0);
+  };
+
+  it('45° curves: 8 make a circle', () => {
+    for (const code of ['CS', 'CL', 'C1', 'LC-09']) closes(code, 8);
+  });
+
+  it('CL runs outside CS, and each switch branches on its own curve', () => {
+    expect(cat.get('CL').ports.find((p) => p.id === 'b')!.y).toBeGreaterThan(cat.get('CS').ports.find((p) => p.id === 'b')!.y);
+    const branch = (sw: string) => cat.get(sw).ports.find((p) => p.id === 'c')!;
+    const end = (c: string) => cat.get(c).ports.find((p) => p.id === 'b')!;
+    for (const [sw, curve] of [
+      ['TRS', 'CS'],
+      ['TRL', 'CL'],
+    ]) {
+      expect(branch(sw).x, sw).toBeCloseTo(end(curve).x);
+      expect(branch(sw).y, sw).toBeCloseTo(end(curve).y);
+    }
+    // left switches mirror the right ones
+    expect(branch('TLS').y).toBeCloseTo(-branch('TRS').y);
+  });
+
+  it('Y switches split evenly left and right', () => {
+    for (const code of ['YS', 'YL', 'Y', 'Y2']) {
+      const [b, c] = ['b', 'c'].map((id) => cat.get(code).ports.find((p) => p.id === id)!);
+      expect(b.y, code).toBeCloseTo(-c.y);
+      expect(b.x, code).toBeCloseTo(c.x);
+    }
+  });
+
+  it('short straights are fractions of S1', () => {
+    const len = (code: string) => cat.get(code).ports.find((p) => p.id === 'b')!.x;
+    expect(len('S2') / len('S1')).toBeCloseTo(0.5);
+    expect(len('S4') / len('S1')).toBeCloseTo(0.25);
+    expect(len('S8') / len('S1')).toBeCloseTo(0.125);
+  });
+
+  it('ramps and climbing curves rise one level', () => {
+    for (const code of ['E1', 'ES1', 'ES7', 'EL', 'ER', 'ECR', 'EC3', 'AL-09']) {
+      const b = cat.get(code).ports.find((p) => p.id === 'b')!;
+      expect(b.z, code).toBe(1);
+    }
+  });
+
+  it('every kit lists at least one track piece and kit ids are unique', () => {
+    const ids = BUILTIN_KITS.map((k) => k.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const k of BUILTIN_KITS)
+      expect(
+        Object.keys(k.pieces).some((c) => cat.get(c).isTrack),
+        k.id,
+      ).toBe(true);
+  });
+
+  it('original-generation pieces whose printed code clashes with later track end in -09', () => {
+    const old = cat.all().filter((t) => !t.custom && t.description.includes('2009–2013'));
+    expect(old.length).toBeGreaterThan(0);
+    for (const t of old) if (['S1', 'S2', 'S4', 'T2', 'E2'].includes(t.code.replace(/-09$/, ''))) expect(t.code).toMatch(/-09$/);
+  });
+
+  it('a raised joint can stand on a riser block', () => {
+    const span = placeChain(cat, startPose(0, 0, 0, 1), [S]).pieces;
+    const v = validateLayout(cat, span, { owned: { S1: 1, RB1: 2 } });
+    expect(v.supports.unsupported).toEqual({});
+    expect(v.supports.used).toEqual({ RB1: 2 });
+  });
+});
+
 describe('autogen', () => {
   it('finds closing curve words', () => {
     const words = closingWords(8, 60, true);
@@ -567,7 +642,7 @@ describe('piece definitions (paths)', () => {
 
 describe('sharing', () => {
   const mine: PieceSpec = {
-    code: 'S2',
+    code: 'MY2',
     name: 'Half straight',
     category: 'straight',
     description: '',
@@ -584,20 +659,20 @@ describe('sharing', () => {
         .map((t) => t.code),
     );
     const changed = { ...mine, paths: [{ from: 'a', to: 'b', length: 0.25 }] };
-    const r1 = mergePieces([mine], [changed, { ...mine, code: 'S4' }, { ...mine, code: 'C' }], builtins);
-    expect(r1.added).toEqual(['S4']);
-    expect(r1.conflicts.sort()).toEqual(['C', 'S2']);
-    expect(r1.merged.find((p) => p.code === 'S2')!.paths![0].length).toBe(0.5);
+    const r1 = mergePieces([mine], [changed, { ...mine, code: 'MY4' }, { ...mine, code: 'C' }], builtins);
+    expect(r1.added).toEqual(['MY4']);
+    expect(r1.conflicts.sort()).toEqual(['C', 'MY2']);
+    expect(r1.merged.find((p) => p.code === 'MY2')!.paths![0].length).toBe(0.5);
     const r2 = mergePieces([mine], [changed], builtins, true);
-    expect(r2.merged.find((p) => p.code === 'S2')!.paths![0].length).toBe(0.25);
-    expect(mergePieces([mine], [mine], builtins).unchanged).toEqual(['S2']);
+    expect(r2.merged.find((p) => p.code === 'MY2')!.paths![0].length).toBe(0.25);
+    expect(mergePieces([mine], [mine], builtins).unchanged).toEqual(['MY2']);
   });
 
   it('layout files carry the custom pieces they use', () => {
     const c2 = new Catalog(DEFAULT_PARAMS, [mine]);
-    const layout = { ...newLayout('x'), pieces: placeChain(c2, startPose(), [step('S1'), step('S2')]).pieces };
+    const layout = { ...newLayout('x'), pieces: placeChain(c2, startPose(), [step('S1'), step('MY2')]).pieces };
     const file = makeLayoutFile(layout, c2);
-    expect(file.pieces.map((p) => p.code)).toEqual(['S2']);
+    expect(file.pieces.map((p) => p.code)).toEqual(['MY2']);
     const back = parseLayoutFile(JSON.stringify(file));
     expect(back.pieces[0].paths).toEqual(mine.paths);
     expect(back.layout.pieces.length).toBe(2);
@@ -606,9 +681,9 @@ describe('sharing', () => {
   });
 
   it('parts files round-trip pieces and custom kits', () => {
-    const kit = { id: 'MYKIT', name: 'Mine', pieces: { S2: 4 }, custom: true };
+    const kit = { id: 'MYKIT', name: 'Mine', pieces: { MY2: 4 }, custom: true };
     const back = parsePartsFile(JSON.stringify(makePartsFile([mine], [...BUILTIN_KITS, kit])));
-    expect(back.pieces[0].code).toBe('S2');
+    expect(back.pieces[0].code).toBe('MY2');
     expect(back.kits.map((k) => k.id)).toEqual(['MYKIT']);
     expect(() => parsePartsFile('{"format":"other"}')).toThrow();
   });
