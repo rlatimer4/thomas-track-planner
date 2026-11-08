@@ -139,8 +139,9 @@ has no "What's Included" list, the kit is counted from the labelled pieces in it
    - **Bridge crossings** score most: 30 points for each place track passes over other track with enough headroom (up to 3).
    - **Height:** 10 points per level the layout climbs to, plus up to 30 for how much of the track is raised.
    - **Compact:** up to 45 points for how densely the track fills its footprint.
-   - Continuous running, features (station, sidings, passing loops) and pieces used add to it. S-bends, warnings and
-     unsupported joints count against it.
+   - **Pieces used:** up to 60 points, by the share of your track the layout uses.
+   - Continuous running and features (station, sidings, passing loops) add to it. S-bends, warnings and unsupported joints
+     count against it.
 
    Figure-8s and hills are tried often so there are plenty to choose from. Results are de-duplicated, and the shapes are
    varied. Hover a result's score to see its breakdown. The weights are `SCORE_WEIGHTS` in `src/core/autogen.ts`.

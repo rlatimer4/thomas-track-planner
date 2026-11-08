@@ -791,7 +791,8 @@ function raisedShare(cat: Catalog, pieces: PlacedPiece[]): number {
 
 /** Points for each part of the score, so the UI can explain it. */
 export const SCORE_WEIGHTS = {
-  piecesUsed: 30,
+  /** Points for using all the track you own (scaled by the share used). */
+  piecesUsed: 60,
   continuousRunning: 20,
   perFeature: 8,
   perCrossing: 30,
