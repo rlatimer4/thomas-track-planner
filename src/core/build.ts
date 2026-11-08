@@ -10,7 +10,13 @@ export interface ChainStep {
 }
 
 /** Place a single piece onto an open pose, returning the piece and its world ports. */
-export function placeAt(cat: Catalog, target: Pose, code: string, inPort: string, uid = newUid()): { piece: PlacedPiece; ports: WorldPort[] } {
+export function placeAt(
+  cat: Catalog,
+  target: Pose,
+  code: string,
+  inPort: string,
+  uid = newUid(),
+): { piece: PlacedPiece; ports: WorldPort[] } {
   const pose = attachPose(cat, target, code, inPort);
   const piece: PlacedPiece = { uid, code, ...pose };
   return { piece, ports: worldPorts(cat, piece) };

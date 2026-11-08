@@ -165,9 +165,10 @@ describe('elevation', () => {
     expect(ok.issues.some((i) => i.rule === 'bad-joint')).toBe(false);
   });
 
-  it('the lid alone is a crossing one level up; on the bucket it is four levels up', () => {
-    const lid = placeAt(cat, startPose(0, 0, 0, 1), 'XB', 'a').ports;
-    expect(lid.every((p) => p.z === 1)).toBe(true);
+  it('the lid is a 3-way fork standing one level up', () => {
+    const lid = placeAt(cat, startPose(0, 0, 0, 1), 'XB', 'a');
+    expect(lid.ports.every((p) => p.z === 1)).toBe(true);
+    expect(cat.get('XB').routes.a.sort()).toEqual(['b', 'c', 'd']);
     // joined straight from the floor it stays on the floor, and the joint is flagged
     const fromFloor = placeChain(cat, startPose(), [S, { code: 'XB', inPort: 'a', outPort: 'b' }]).pieces;
     expect(fromFloor[1].z).toBe(0);
@@ -175,21 +176,27 @@ describe('elevation', () => {
     // ramp up to it and it fits
     const ramped = placeChain(cat, startPose(), [step('AR'), { code: 'XB', inPort: 'a', outPort: 'b' }]).pieces;
     expect(validateLayout(cat, ramped).issues.filter((i) => i.severity === 'error')).toEqual([]);
-    const bucket = placeAt(cat, startPose(), 'XB4', 'e').ports;
-    expect(bucket.find((p) => p.port === 'a')!.z).toBe(4);
-    expect(bucket.find((p) => p.port === 'f')!.z).toBe(0);
+    expect(validateLayout(cat, ramped).issues.some((i) => i.rule === 'switch-on-grade')).toBe(false);
   });
 
-  it('both ways of using the lid count against the same piece', () => {
-    const a = placeAt(cat, startPose(), 'XB', 'a').piece;
-    const b = placeAt(cat, startPose(2000, 0), 'XB4', 'e').piece;
-    const v = validateLayout(cat, [a, b], { owned: { XB: 1 } });
-    expect(v.counts.XB).toBe(2);
-    expect(v.issues.some((i) => i.rule === 'shortage')).toBe(true);
+  it('the bucket is a 4-way crossing at level 4 with a tunnel at ground level', () => {
+    const bucket = placeAt(cat, startPose(), 'BKT', 'e').ports;
+    for (const port of ['a', 'b', 'c', 'd']) expect(bucket.find((p) => p.port === port)!.z).toBe(4);
+    expect(bucket.find((p) => p.port === 'f')!.z).toBe(0);
+    expect(cat.get('BKT').routes.a).toEqual(['b']);
+    expect(cat.get('BKT').routes.c).toEqual(['d']);
+  });
+
+  it('the lid and the bucket are separate pieces in the inventory', () => {
+    const lid = placeAt(cat, startPose(0, 0, 0, 1), 'XB', 'a').piece;
+    const bucket = placeAt(cat, startPose(2000, 0), 'BKT', 'e').piece;
+    const v = validateLayout(cat, [lid, bucket], { owned: { XB: 1, BKT: 1 } });
+    expect(v.counts).toEqual({ XB: 1, BKT: 1 });
+    expect(v.issues.some((i) => i.rule === 'shortage')).toBe(false);
   });
 
   it('ground track can pass through the bucket tunnel but not through its sides', () => {
-    const bucket = placeAt(cat, startPose(), 'XB4', 'e').piece;
+    const bucket = placeAt(cat, startPose(), 'BKT', 'e').piece;
     const S1 = cat.params.straight;
     // track joined to both tunnel mouths runs through underneath
     const before = placeChain(cat, startPose(-S1, 0, 0), [S]).pieces;
@@ -209,8 +216,24 @@ describe('elevation', () => {
     const { pieces } = placeChain(cat, startPose(), [step('AR'), S, step('AL'), S, step('AR'), S]);
     const v = validateLayout(cat, pieces, { owned: { AR: 2, AL: 1, S1: 3, RR1: 2, RS2: 2, RS3: 2, D1: 2 } });
     expect(v.supports.needed).toEqual({ 1: 2, 2: 2, 3: 2 });
-    // level 3 needs RS3 pairs: only one pair owned, so one joint is unsupported
-    expect(v.supports.unsupported).toEqual({ 2: 1, 3: 1 });
+    // level 3: one RS3 pair. Level 2: two stacked RR1 piers, then an RS2 pair. Nothing left for the rest.
+    expect(v.supports.used).toEqual({ RS3: 2, RS2: 2, RR1: 2, D1: 2 });
+    expect(v.supports.unsupported).toEqual({ 3: 1, 1: 2 });
+  });
+
+  it('supports stack to reach higher joints', () => {
+    // one raised joint at each level, measured on a lone straight placed up there
+    const at = (level: number) => placeChain(cat, startPose(0, 0, 0, level), [S]).pieces;
+    const plan = (level: number, owned: Record<string, number>) => validateLayout(cat, at(level), { owned }).supports;
+    // two RS1 stacked equal an RS2: four RS1 + a deck hold a level-2 joint (both ends of the straight need one)
+    expect(plan(2, { S1: 1, RS1: 8, D1: 2 }).unsupported).toEqual({});
+    expect(plan(2, { S1: 1, RS1: 8, D1: 2 }).used).toEqual({ RS1: 8, D1: 2 });
+    // RS2 + RS1 reach level 3
+    expect(plan(3, { S1: 1, RS2: 4, RS1: 4, D1: 2 }).used).toEqual({ RS2: 4, RS1: 4, D1: 2 });
+    // RR1 piers stack on their own, no deck needed
+    expect(plan(2, { S1: 1, RR1: 4 }).used).toEqual({ RR1: 4 });
+    // not tall enough
+    expect(plan(4, { S1: 1, RS3: 4, D1: 2 }).unsupported).toEqual({ 4: 2 });
   });
 });
 
@@ -241,10 +264,10 @@ describe('kits and inventory', () => {
     expect(n).toBe(25);
   });
 
-  it('HNP81 has 23 track pieces plus the junction base and lid', () => {
+  it('HNP81 has 23 track pieces plus the junction base, lid and bucket', () => {
     const k = BUILTIN_KITS.find((x) => x.id === 'HNP81')!;
     const n = Object.entries(k.pieces)
-      .filter(([c]) => cat.get(c).isTrack && !['SWB', 'XB', 'BS2'].includes(c))
+      .filter(([c]) => cat.get(c).isTrack && !['SWB', 'XB', 'BKT', 'BS2'].includes(c))
       .reduce((a, [, v]) => a + v, 0);
     expect(n).toBe(23);
   });

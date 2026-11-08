@@ -50,20 +50,20 @@ Height is counted in **levels**. Ground is level 0, and each support height is o
 | `AL` | Climbing curve: same shape as a `C` curve, rises one level and turns **left** on the way up (so **right** on the way down) |
 | `AR` | Mirror image of `AL`: turns **right** going up, **left** going down |
 | `AR1` | Like `AR`, but its rock base also holds up the joint at the top, so no support is needed there. It doesn't fit against the bucket lid |
-| `RR1`, `RS1` | Support for level 1 (`RS1` is used in pairs with a `D1` deck; two stacked `RS1`s reach level 2) |
-| `RS2` | Support for level 2 (pair + `D1`) |
-| `RS3` | Support for level 3 (pair + `D1`) |
-| `XB` | Bucket lid used on its own: a crossing on its own legs, one level up. Ramp up to it |
-| `XB4` | The lid on top of the bucket: crossing four levels up, with a ground-level tunnel through the bucket. Same physical lid as `XB` |
+| `RR1` | Riser pier for level 1. Stands on its own; piers stack (two = level 2) |
+| `RS1`, `RS2`, `RS3` | Supports for levels 1, 2 and 3. Used in pairs (one column each side) with a `D1` deck under the joint. They stack: two `RS1` equal one `RS2`, and `RS2` + `RS1` reach level 3 |
+| `XB` | Bucket lid: a 3-way fork (left, straight, right) standing one level up on its own legs. Ramp up to it |
+| `BKT` | Track bucket: a 4-way crossing on top at level 4, with a ground-level tunnel through it |
 | `VB` | Lift bridge: holds itself up when raised |
 
 How it's checked:
 - Joints connect only at the same level; otherwise it's a **height mismatch**.
 - Track may cross over other track that's at least one level lower (configurable). The bucket is solid, so track can't pass
   through its sides at any height below its top.
-- Every raised joint needs a support of the matching height unless a self-supporting piece (`AR1`'s top, the bridge, the lid)
-  holds it. The **Parts** panel shows supports needed per level and which of yours are used.
-- The bucket and the standalone lid always sit on the floor. A piece that would go below ground is an error.
+- Every raised joint needs supports stacked to its height unless a self-supporting piece (`AR1`'s top, the bridge, the lid,
+  the bucket) holds it. For each joint the planner picks the combination using the fewest pieces you own: a stack of piers,
+  or two stacked columns of `RS` supports plus a `D1` deck. The **Parts** panel shows supports needed per level and which of yours are used.
+- The bucket and the lid always sit on the floor. A piece that would go below ground is an error.
 - The auto designer climbs and descends on climbing curves in balanced pairs, up to level 3, and never puts a switch right next
   to one.
 
@@ -74,7 +74,7 @@ Contents are taken from each set's printed instructions ("What's Included"):
 | Kit | Track pieces |
 | --- | --- |
 | **GLK80** Talking Thomas & Percy Train Set | C ×6, CU4, CS2, TL, TR ×2, PR, PL, S1 ×2, TU4, AL ×4, BS1, Brendam Docks curve, loading station, Vicarstown bridge, supports RR1 ×2, RS2 ×4, D1 ×2 |
-| **HNP81** Connect & Build Track Bucket | CHT, AL ×3, ES3 ×5, AR1, AR, C ×3, TR ×2, TL, BT1, S1 ×4, RRT, junction base, bucket crossing lid, BS2, supports RS1 ×4, RS2 ×6, RS3 ×4, D1 ×7 |
+| **HNP81** Connect & Build Track Bucket | CHT, AL ×3, ES3 ×5, AR1, AR, C ×3, TR ×2, TL, BT1, S1 ×4, RRT, junction base, bucket lid (3-way fork), bucket (crossing + tunnel), BS2, supports RS1 ×4, RS2 ×6, RS3 ×4, D1 ×7 |
 
 Pieces whose shape couldn't be confirmed from the instructions (for example the `PR`/`PL` offset, the station and the junction
 base) are marked **estimated** in the catalog. Measure yours and calibrate in Settings, or add a custom piece.

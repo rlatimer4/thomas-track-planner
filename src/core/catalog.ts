@@ -80,6 +80,8 @@ export interface PieceSpec {
   supportedPorts?: string[];
   /** Inventory codes this piece can't be joined to directly. */
   cannotJoin?: string[];
+  /** Supports used in pairs (one each side of the joint) with a D1 deck on top. */
+  pairedSupport?: boolean;
 }
 
 export interface PortDef {
@@ -198,13 +200,14 @@ export function builtinSpecs(p: GeometryParams): PieceSpec[] {
     color,
     paths: [{ from: 'a', ops: [line(40)] }],
   });
-  const support = (code: string, name: string, level: number, description: string, color: string): PieceSpec => ({
+  const support = (code: string, name: string, level: number, description: string, color: string, pairedSupport = false): PieceSpec => ({
     code,
     name,
     category: 'support',
     description,
     color,
     supportLevel: level,
+    pairedSupport,
   });
 
   return [
@@ -277,32 +280,26 @@ export function builtinSpecs(p: GeometryParams): PieceSpec[] {
     },
     {
       code: 'XB',
-      name: 'Bucket lid crossing',
-      category: 'crossing',
-      description: 'The bucket lid used on its own: a 90° crossing raised one level on its own legs. Ramp up to it from each side.',
-      color: '#9ca3af',
+      name: 'Bucket lid (3-way fork)',
+      category: 'switch',
+      description:
+        'The bucket lid used as track: a 3-way fork standing one level up on its own legs. One end splits left, straight and right. Ramp up to it.',
+      color: '#60a5fa',
       selfSupporting: true,
       approximate: true,
       paths: [
         { from: 'a', to: 'b', ops: [line(S)], zFrom: 1, zTo: 1 },
-        { from: 'c', to: 'd', start: { x: S / 2, y: -S / 2, dir: 90 }, ops: [line(S)], zFrom: 1, zTo: 1 },
+        { from: 'a', to: 'c', ops: [arc(R, -A)], zFrom: 1, zTo: 1 },
+        { from: 'a', to: 'd', ops: [arc(R, A)], zFrom: 1, zTo: 1 },
       ],
-      body: {
-        x: p.trackWidth * 0.3,
-        y: -S / 2 + p.trackWidth * 0.3,
-        w: S - p.trackWidth * 0.6,
-        h: S - p.trackWidth * 0.6,
-        zMin: 0,
-        zMax: 1,
-      },
+      body: { x: p.trackWidth * 0.3, y: -45, w: S * 0.7, h: 90, zMin: 0, zMax: 1 },
     },
     {
-      code: 'XB4',
-      name: 'Bucket with lid (tunnel + crossing)',
+      code: 'BKT',
+      name: 'Track bucket (crossing + tunnel)',
       category: 'crossing',
-      stock: 'XB',
       description:
-        'The lid on top of the bucket: a 90° crossing 4 levels up, with a ground-level tunnel through the bucket underneath. Uses the same lid as XB.',
+        'The storage bucket: a 4-way (90°) crossing on top at level 4, with a ground-level tunnel through it underneath. Track can’t pass through its sides.',
       color: '#9ca3af',
       selfSupporting: true,
       approximate: true,
@@ -322,10 +319,17 @@ export function builtinSpecs(p: GeometryParams): PieceSpec[] {
       },
     },
     // Supports (not placed directly; counted against raised joints)
-    support('RR1', 'Riser pier', 1, 'Short pier that holds a joint one level up.', '#9a3412'),
-    support('RS1', 'Support, short', 1, 'Short support. Two stacked make a level-2 support.', '#991b1b'),
-    support('RS2', 'Support, medium', 2, 'Medium support (level 2). Used in pairs with a D1 deck.', '#991b1b'),
-    support('RS3', 'Support, tall', 3, 'Tall support (level 3). Used in pairs with a D1 deck.', '#991b1b'),
+    support('RR1', 'Riser pier', 1, 'Pier that holds a joint one level up on its own. Piers stack: two make level 2.', '#9a3412'),
+    support(
+      'RS1',
+      'Support, short',
+      1,
+      'Level-1 support, used in pairs under a D1 deck. Stackable: two RS1 equal one RS2.',
+      '#991b1b',
+      true,
+    ),
+    support('RS2', 'Support, medium', 2, 'Level-2 support, used in pairs under a D1 deck. Stackable with other supports.', '#991b1b', true),
+    support('RS3', 'Support, tall', 3, 'Level-3 support, used in pairs under a D1 deck. Stackable with other supports.', '#991b1b', true),
     support('D1', 'Support deck', 0, 'Grey deck that bridges a pair of supports under a joint.', '#9ca3af'),
   ];
 }

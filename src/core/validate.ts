@@ -87,32 +87,78 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
   }
   const avail: Counts = { ...(owned ?? {}) };
   const used: Counts = {};
-  const take = (req: Counts): boolean => {
-    if (!owned) return true;
-    if (Object.entries(req).some(([c, n]) => (avail[c] ?? 0) < n)) return false;
-    for (const [c, n] of Object.entries(req)) {
-      avail[c] -= n;
-      used[c] = (used[c] ?? 0) + n;
-    }
-    return true;
-  };
-  const options: Record<number, Counts[]> = {
-    1: [{ RR1: 1 }, { RS1: 2, D1: 1 }],
-    2: [
-      { RS2: 2, D1: 1 },
-      { RS1: 4, D1: 1 },
-    ],
-    3: [{ RS3: 2, D1: 1 }],
-  };
-  // custom supports: a single piece holding the exact level
-  for (const s of cat.supports()) if (s.custom && s.supportLevel) (options[s.supportLevel] ??= []).unshift({ [s.code]: 1 });
   const unsupported: Record<number, number> = {};
-  for (const level of Object.keys(needed)
+  const levels = Object.keys(needed)
     .map(Number)
-    .sort((a, b) => b - a)) {
+    .sort((x, y) => y - x);
+  if (!owned) return { needed, used, unsupported };
+
+  // Supports stack: a column of support pieces whose levels add up to the joint's level.
+  // Paired supports (RS1/RS2/RS3) need two columns plus a D1 deck; single ones (piers) need one column.
+  const supportTypes = cat.supports().filter((t) => (t.supportLevel ?? 0) > 0);
+  const paired = supportTypes.filter((t) => t.pairedSupport).sort((x, y) => y.supportLevel! - x.supportLevel!);
+  const single = supportTypes.filter((t) => !t.pairedSupport).sort((x, y) => y.supportLevel! - x.supportLevel!);
+  const deck = cat.has('D1') ? 'D1' : undefined;
+
+  /** Fewest pieces of `types` (from `pool`) stacking to exactly `level`. */
+  const column = (types: typeof supportTypes, pool: Counts, level: number): Counts | undefined => {
+    let best: Counts | undefined;
+    let bestN = Infinity;
+    const pick: Counts = {};
+    const rec = (i: number, left: number, n: number) => {
+      if (n >= bestN) return;
+      if (left === 0) {
+        best = { ...pick };
+        bestN = n;
+        return;
+      }
+      if (i >= types.length) return;
+      const t = types[i];
+      const h = t.supportLevel!;
+      const maxUse = Math.min(Math.floor(left / h), (pool[t.code] ?? 0) - (pick[t.code] ?? 0));
+      for (let k = maxUse; k >= 0; k--) {
+        if (k) pick[t.code] = (pick[t.code] ?? 0) + k;
+        rec(i + 1, left - k * h, n + k);
+        if (k) {
+          pick[t.code] -= k;
+          if (!pick[t.code]) delete pick[t.code];
+        }
+      }
+    };
+    rec(0, level, 0);
+    return best;
+  };
+  const merge = (a2: Counts, b2: Counts) => {
+    const out = { ...a2 };
+    for (const [c, n] of Object.entries(b2)) out[c] = (out[c] ?? 0) + n;
+    return out;
+  };
+  const size = (c: Counts) => Object.values(c).reduce((x, y) => x + y, 0);
+
+  for (const level of levels) {
     for (let i = 0; i < needed[level]; i++) {
-      const ok = (options[level] ?? []).some((o) => take(o));
-      if (!ok) unsupported[level] = (unsupported[level] ?? 0) + 1;
+      const options: Counts[] = [];
+      const one = column(single, avail, level);
+      if (one) options.push(one);
+      if (deck && (avail[deck] ?? 0) > 0) {
+        const first = column(paired, avail, level);
+        if (first) {
+          const rest = { ...avail };
+          for (const [c, n] of Object.entries(first)) rest[c] -= n;
+          const second = column(paired, rest, level);
+          if (second) options.push(merge(merge(first, second), { [deck]: 1 }));
+        }
+      }
+      // fewest pieces wins; a single pier wins a tie
+      const choice = options.sort((x, y) => size(x) - size(y))[0];
+      if (!choice) {
+        unsupported[level] = (unsupported[level] ?? 0) + 1;
+        continue;
+      }
+      for (const [c, n] of Object.entries(choice)) {
+        avail[c] -= n;
+        used[c] = (used[c] ?? 0) + n;
+      }
     }
   }
   return { needed, used, unsupported };
@@ -279,7 +325,9 @@ export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: Valida
           issues.push(issue('reverse-curve', 'info', 'Curves turn opposite ways back to back.', [p.uid, q.uid], at));
       }
       const cats = [t.category, u.category];
-      if (cats.includes('switch') && cats.includes('ramp'))
+      // free-standing raised forks (the bucket lid) can only be reached by ramp, so they're exempt
+      const sw = t.category === 'switch' ? t : u;
+      if (cats.includes('switch') && cats.includes('ramp') && !sw.body)
         issues.push(issue('switch-on-grade', 'warning', 'Switch connects directly to a ramp.', [p.uid, q.uid], at));
       if (t.category === 'ramp' && u.category === 'ramp') {
         // only a problem if both climb the same way

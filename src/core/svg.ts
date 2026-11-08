@@ -18,7 +18,9 @@ export function layoutToSvg(cat: Catalog, pieces: PlacedPiece[], opts: { labels?
       const d = path.map((s, i) => `${i ? 'L' : 'M'}${(s.x - b.minX + m).toFixed(1)},${(s.y - b.minY + m).toFixed(1)}`).join('');
       const z = Math.max(0, Math.round(Math.max(...path.map((s) => s.z))));
       parts.push(`<path d="${d}" fill="none" stroke="#fff" stroke-width="${tw + 6}" stroke-linecap="butt"/>`);
-      parts.push(`<path d="${d}" fill="none" stroke="${LEVEL_COLORS[Math.min(z, LEVEL_COLORS.length - 1)]}" stroke-width="${tw}" stroke-linecap="butt" opacity="0.9"/>`);
+      parts.push(
+        `<path d="${d}" fill="none" stroke="${LEVEL_COLORS[Math.min(z, LEVEL_COLORS.length - 1)]}" stroke-width="${tw}" stroke-linecap="butt" opacity="0.9"/>`,
+      );
       parts.push(`<path d="${d}" fill="none" stroke="${t.color}" stroke-width="${tw * 0.35}" stroke-dasharray="4 6"/>`);
     }
     if (opts.labels !== false && t.isTrack) {
