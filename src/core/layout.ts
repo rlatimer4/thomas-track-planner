@@ -50,6 +50,22 @@ export function worldPorts(cat: Catalog, piece: PlacedPiece): WorldPort[] {
   });
 }
 
+/** Highest level a placed piece reaches: its highest track, or the top of its solid body (e.g. the bucket). */
+export function topLevel(cat: Catalog, piece: PlacedPiece): number {
+  const t = cat.get(piece.code);
+  const tracks = Math.max(0, ...t.samples.flat().map((s) => s.z));
+  return piece.z + Math.max(tracks, t.body?.zMax ?? 0);
+}
+
+/**
+ * Pieces in the order to draw them, lowest first, so higher track appears on top. Pieces are ordered by the
+ * highest point they reach rather than their base: the bucket stands on the floor but its crossing is at level 4.
+ */
+export function drawOrder(cat: Catalog, pieces: PlacedPiece[]): PlacedPiece[] {
+  const top = new Map(pieces.map((p) => [p.uid, topLevel(cat, p)]));
+  return [...pieces].sort((a, b) => top.get(a.uid)! - top.get(b.uid)! || a.z - b.z);
+}
+
 export function worldSamples(cat: Catalog, piece: PlacedPiece): Sample[][] {
   const t = cat.get(piece.code);
   return t.samples.map((path) =>

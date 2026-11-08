@@ -4,6 +4,7 @@ import {
   attachPose,
   computeConnectivity,
   dirVec,
+  drawOrder,
   layoutBounds,
   layoutToSvg,
   makeLayoutFile,
@@ -519,7 +520,7 @@ export function Builder() {
     .trackPieces()
     .filter((t) => !onlyOwned || (owned[t.stockCode] ?? 0) > 0)
     .sort((a, b) => a.category.localeCompare(b.category) || a.code.localeCompare(b.code));
-  const sortedPieces = useMemo(() => [...pieces].sort((a, b) => a.z - b.z), [pieces]);
+  const sortedPieces = useMemo(() => drawOrder(cat, pieces), [cat, pieces]);
   const errors = validation.issues.filter((i) => i.severity === 'error').length;
   const warnings = validation.issues.filter((i) => i.severity === 'warning').length;
   const bounds = layoutBounds(cat, pieces);

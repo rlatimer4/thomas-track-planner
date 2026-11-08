@@ -20,6 +20,7 @@ import {
   attachPose,
   closingWords,
   computeConnectivity,
+  drawOrder,
   generateLayouts,
   inventoryTotals,
   placeAt,
@@ -236,6 +237,14 @@ describe('elevation', () => {
     expect(Math.abs(angleDiff(cd, 0))).toBeCloseTo(60);
     // the solid body is the √3 : 1 footprint
     expect(t.bodyRect!.h / t.bodyRect!.w).toBeGreaterThan(1.5);
+  });
+
+  it('pieces draw lowest first by the highest point they reach, so the bucket covers a ramp beside it', () => {
+    const bucket: PlacedPiece = { uid: 'bucket', code: 'BKT', x: 0, y: 0, rot: 0, z: 0 };
+    const ramp: PlacedPiece = { uid: 'ramp', code: 'AL', x: -100, y: 0, rot: 0, z: 0 };
+    const floor: PlacedPiece = { uid: 'floor', code: 'S1', x: -300, y: 0, rot: 0, z: 0 };
+    // added after the bucket, and on the same base, the ramp and the straight still draw underneath it
+    expect(drawOrder(cat, [bucket, ramp, floor]).map((p) => p.uid)).toEqual(['floor', 'ramp', 'bucket']);
   });
 
   it('the lid and the bucket are separate pieces in the inventory', () => {

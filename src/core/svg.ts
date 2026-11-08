@@ -1,5 +1,5 @@
 import type { Catalog } from './catalog';
-import { layoutBounds, worldSamples, type PlacedPiece } from './layout';
+import { drawOrder, layoutBounds, worldSamples, type PlacedPiece } from './layout';
 
 export const LEVEL_COLORS = ['#475569', '#2563eb', '#7c3aed', '#c026d3', '#db2777'];
 
@@ -10,7 +10,7 @@ export function layoutToSvg(cat: Catalog, pieces: PlacedPiece[], opts: { labels?
   const w = Math.max(1, b.width + 2 * m);
   const h = Math.max(1, b.height + 2 * m + 30);
   const tw = cat.params.trackWidth;
-  const sorted = [...pieces].sort((a, b2) => a.z - b2.z);
+  const sorted = drawOrder(cat, pieces);
   const parts: string[] = [];
   for (const p of sorted) {
     const t = cat.get(p.code);

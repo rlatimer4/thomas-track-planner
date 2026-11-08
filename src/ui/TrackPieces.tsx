@@ -1,5 +1,15 @@
 import { memo } from 'react';
-import { LEVEL_COLORS, applyTransform, dirVec, worldPorts, worldSamples, type Catalog, type PlacedPiece, type Sample } from '../core';
+import {
+  LEVEL_COLORS,
+  applyTransform,
+  dirVec,
+  drawOrder,
+  worldPorts,
+  worldSamples,
+  type Catalog,
+  type PlacedPiece,
+  type Sample,
+} from '../core';
 
 function pathD(pts: { x: number; y: number }[]): string {
   return pts.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join('');
@@ -138,7 +148,7 @@ export function LayoutPreview({
   const minY = Math.min(...pts.map((p) => p.y)) - pad;
   const maxX = Math.max(...pts.map((p) => p.x)) + pad;
   const maxY = Math.max(...pts.map((p) => p.y)) + pad;
-  const sorted = [...pieces].sort((a, b) => a.z - b.z);
+  const sorted = drawOrder(cat, pieces);
   return (
     <svg viewBox={`${minX} ${minY} ${maxX - minX} ${maxY - minY}`} width="100%" style={{ maxHeight: size }} role="img">
       {sorted.map((p) => (
