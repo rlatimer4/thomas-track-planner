@@ -7,6 +7,8 @@ import type { PathDef, PieceSpec } from './catalog';
 import { TRACK_STANDARD } from './standards';
 
 const A = TRACK_STANDARD.curveAngle; // 60°
+/** Half the long side of the track bucket, in straights (√3/2: its corner-to-corner tracks are 120° apart). */
+const BUCKET_HALF = Math.sqrt(3) / 2;
 
 const through: PathDef = { from: 'a', to: 'b' }; // one standard straight
 const curve: PathDef = { from: 'a', to: 'b', turn: A }; // one standard curve (right when entered at a)
@@ -188,16 +190,18 @@ const CURRENT_PIECES: PieceSpec[] = [
     name: 'Track bucket (crossing + tunnel)',
     category: 'crossing',
     description:
-      'The storage bucket: a 4-way (90°) crossing on top at level 4, with a ground-level tunnel through it. Track can’t pass through its sides.',
+      'The storage bucket turned over: on its bottom (level 4) two tracks cross corner to corner with 120° between them, and a ground-level tunnel runs underneath along the line bisecting that 120° angle. Track can’t pass through its sides.',
     color: '#9ca3af',
     selfSupporting: true,
     approximate: true,
+    // Corner-to-corner tracks 120° apart need a footprint √3 times as long as it is wide. The tunnel
+    // (e→f, one straight) crosses the short way; the top tracks run between opposite corners, 2 straights each.
     paths: [
-      { from: 'a', to: 'b', level: 4 },
-      { from: 'c', to: 'd', level: 4, start: { along: 0.5, side: -0.5, heading: 90 } },
+      { from: 'a', to: 'b', length: 2, level: 4, start: { side: -BUCKET_HALF, heading: 60 } },
+      { from: 'c', to: 'd', length: 2, level: 4, start: { side: BUCKET_HALF, heading: -60 } },
       { from: 'e', to: 'f' },
     ],
-    body: { along: 0, side: -0.5, length: 1, width: 1, zMin: 0, zMax: 4, tunnel: true },
+    body: { along: 0, side: -BUCKET_HALF, length: 1, width: 2 * BUCKET_HALF, zMin: 0, zMax: 4, tunnel: true },
   },
 
   // ------------------------------------------------------------------ supports (counted against raised joints, not placed)

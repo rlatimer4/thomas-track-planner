@@ -207,6 +207,33 @@ describe('elevation', () => {
     expect(cat.get('BKT').routes.c).toEqual(['d']);
   });
 
+  it('the bucket tracks run corner to corner 120° apart, and the tunnel bisects that angle', () => {
+    const t = cat.get('BKT');
+    const port = (id: string) => t.ports.find((p) => p.id === id)!;
+    const S1 = cat.params.straight;
+    const half = (Math.sqrt(3) / 2) * S1;
+    // ends sit on the four corners of the footprint (tunnel axis = x, from 0 to one straight)
+    for (const [id, x, y] of [
+      ['a', 0, -half],
+      ['b', S1, half],
+      ['c', 0, half],
+      ['d', S1, -half],
+    ] as const) {
+      expect(port(id).x, id).toBeCloseTo(x);
+      expect(port(id).y, id).toBeCloseTo(y);
+    }
+    // heading of each top track (its far end faces the way the track runs)
+    const ab = port('b').dir;
+    const cd = port('d').dir;
+    expect(Math.abs(angleDiff(ab, cd))).toBeCloseTo(120);
+    // the tunnel runs along the bisector of the 120° angle
+    const tunnel = port('f').dir;
+    expect(Math.abs(angleDiff(ab, tunnel))).toBeCloseTo(60);
+    expect(Math.abs(angleDiff(cd, tunnel))).toBeCloseTo(60);
+    // the solid body is the √3 : 1 footprint
+    expect(t.bodyRect!.h / t.bodyRect!.w).toBeGreaterThan(1.5);
+  });
+
   it('the lid and the bucket are separate pieces in the inventory', () => {
     const lid = placeAt(cat, startPose(0, 0, 0, 1), 'XB', 'a').piece;
     const bucket = placeAt(cat, startPose(2000, 0), 'BKT', 'e').piece;
