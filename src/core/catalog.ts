@@ -102,7 +102,19 @@ export interface PieceSpec {
   /** Pieces with a stop/go lever where engines wait (stop track, docks, station). */
   stop?: boolean;
   /** Solid body that other track can't pass through, in straights from the origin, between two levels. */
-  body?: { along: number; side: number; length: number; width: number; zMin: number; zMax: number; tunnel?: boolean };
+  body?: {
+    along: number;
+    side: number;
+    length: number;
+    width: number;
+    zMin: number;
+    zMax: number;
+    /**
+     * An opening through the bottom level, along the piece's origin line, that other track can run through.
+     * `true` fits one track; a number is how many tracks fit side by side (one lane apart). It has no track of its own.
+     */
+    tunnel?: boolean | number;
+  };
   /** Inventory code when this is another way of using a physical piece. Defaults to `code`. */
   stock?: string;
   /** True when the geometry is an estimate rather than confirmed. */
@@ -133,7 +145,7 @@ export interface PieceType extends PieceSpec {
   /** Centre-line length of each route, keyed `from>to`, mm. */
   routeLength: Record<string, number>;
   /** Body rectangle in mm (local frame), for drawing. */
-  bodyRect?: { x: number; y: number; w: number; h: number; zMax: number };
+  bodyRect?: { x: number; y: number; w: number; h: number; zMax: number; /** Half-width of the tunnel opening, mm. */ tunnel?: number };
   isTrack: boolean;
   /** Total centre-line length of the main route, mm (used for scoring). */
   length: number;
@@ -246,13 +258,21 @@ export function resolveSpec(spec: PieceSpec, p: GeometryParams, opts: { strict?:
       w: b.length * p.straight - 2 * inset,
       h: b.width * p.straight - 2 * inset,
     };
-    bodyRect = { ...rect, zMax: b.zMax };
+    // the tunnel leaves room for its tracks' centre-lines plus the clearance the overlap check needs either side
+    const tracks = b.tunnel === true ? 1 : b.tunnel || 0;
+    const tunnelHalf = tracks ? ((tracks - 1) * p.parallelSpacing) / 2 + p.trackWidth * 0.85 + 1 : 0;
+    bodyRect = { ...rect, zMax: b.zMax, ...(tracks ? { tunnel: tunnelHalf } : {}) };
     const step = 15;
+    // evenly spaced, so both edges of the body are always sampled
+    const nx = Math.max(1, Math.ceil(rect.w / step));
+    const ny = Math.max(1, Math.ceil(rect.h / step));
     for (let z = b.zMin; z < b.zMax; z++)
-      for (let x = rect.x; x <= rect.x + rect.w + 1e-6; x += step)
-        for (let y = rect.y; y <= rect.y + rect.h + 1e-6; y += step) {
+      for (let i = 0; i <= nx; i++)
+        for (let j = 0; j <= ny; j++) {
+          const x = rect.x + (i * rect.w) / nx;
+          const y = rect.y + (j * rect.h) / ny;
           // keep a tunnel (along the piece, centred on its origin line) open at the bottom level
-          if (b.tunnel && z === b.zMin && Math.abs(y) < 40) continue;
+          if (tracks && z === b.zMin && Math.abs(y) < tunnelHalf) continue;
           blockers.push({ x, y, z });
         }
   }

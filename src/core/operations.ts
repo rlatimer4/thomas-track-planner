@@ -272,7 +272,7 @@ export function operationalChecks(cat: Catalog, pieces: PlacedPiece[], conn: Con
         const intoExit = t.ports.filter((q) => (t.routes[q.id] ?? []).includes(exit.id));
         return intoExit.filter((q) => reach.has(stateKey({ uid: p.uid, port: q.id }))).length >= 2;
       });
-      // separate routes in use at the same level (the bucket's tunnel runs under its crossing, so it doesn't count)
+      // separate routes in use at the same level (routes on different levels pass over each other, so they don't count)
       const usedRoutes = t.ports.filter((q) => reach.has(stateKey({ uid: p.uid, port: q.id })));
       const routesByLevel = new Map<number, Set<string>>();
       for (const q of usedRoutes)

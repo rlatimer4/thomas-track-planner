@@ -191,18 +191,17 @@ const CURRENT_PIECES: PieceSpec[] = [
     name: 'Track bucket (crossing + tunnel)',
     category: 'crossing',
     description:
-      'The storage bucket turned over: on its bottom (level 4) two tracks cross corner to corner with 120° between them, and a ground-level tunnel runs underneath along the line bisecting that 120° angle. Track can’t pass through its sides.',
+      'The storage bucket turned over: on its bottom (level 4) two tracks cross corner to corner with 120° between them. A tunnel underneath, along the line bisecting that 120° angle, lets the bucket stand over your own ground track: it fits two tracks side by side. Track can’t pass through its sides.',
     color: '#9ca3af',
     selfSupporting: true,
     approximate: true,
     // Each top track is one straight running between opposite corners, 120° from the other, so the footprint is
-    // √3 times as long as it is wide. The tunnel (e→f) crosses the short way, half a straight.
+    // √3 times as long as it is wide. The tunnel crosses the short way and has no track of its own.
     paths: [
       { from: 'a', to: 'b', level: 4, start: { side: -BUCKET_HALF, heading: 60 } },
       { from: 'c', to: 'd', level: 4, start: { side: BUCKET_HALF, heading: -60 } },
-      { from: 'e', to: 'f', length: BUCKET_SHORT },
     ],
-    body: { along: 0, side: -BUCKET_HALF, length: BUCKET_SHORT, width: 2 * BUCKET_HALF, zMin: 0, zMax: 4, tunnel: true },
+    body: { along: 0, side: -BUCKET_HALF, length: BUCKET_SHORT, width: 2 * BUCKET_HALF, zMin: 0, zMax: 4, tunnel: 2 },
   },
 
   // ------------------------------------------------------------------ supports (counted against raised joints, not placed)

@@ -75,12 +75,12 @@ Height is counted in **levels**. Ground is level 0, and each support height is o
 | `RR1` | Rock-style pier for level 1. Stands on its own; does not stack |
 | `RS1`, `RS2`, `RS3` | Supports for levels 1, 2 and 3. Used in pairs (one column each side) with a `D1` deck under the joint. They stack: two `RS1` equal one `RS2`, and `RS2` + `RS1` reach level 3 |
 | `XB` | Bucket lid: a 3-way fork (left, straight, right) standing one level up on its own legs. Ramp up to it |
-| `BKT` | Track bucket, turned over: two tracks cross corner to corner on its bottom at level 4, 120° apart, and a ground-level tunnel runs underneath along the line bisecting that 120° angle |
+| `BKT` | Track bucket, turned over: two tracks cross corner to corner on its bottom at level 4, 120° apart, and a tunnel underneath, along the line bisecting that 120° angle, lets it stand over two of your own ground tracks side by side (it has no track of its own) |
 | `VB` | Vicarstown lift bridge: carries a straight at level 2, holding both of its ends, so track can pass underneath |
 
 How it's checked:
 - Joints connect only at the same level; otherwise it's a **height mismatch**.
-- Track may cross over other track that's at least two levels lower, which is the headroom an engine needs (configurable). The bucket is solid, so track can't pass
+- Track may cross over other track that's at least two levels lower, which is the headroom an engine needs (configurable). The bucket is solid apart from its tunnel, so track can't pass
   through its sides at any height below its top.
 - Every raised joint needs supports stacked to its height unless a self-supporting piece (`AR1`'s top, the bridge, the lid,
   the bucket) holds it. For each joint the planner picks the combination using the fewest pieces you own: an `RR1` pier (level 1 only),

@@ -199,12 +199,14 @@ describe('elevation', () => {
     expect(validateLayout(cat, ramped).issues.some((i) => i.rule === 'switch-on-grade')).toBe(false);
   });
 
-  it('the bucket is a 4-way crossing at level 4 with a tunnel at ground level', () => {
-    const bucket = placeAt(cat, startPose(), 'BKT', 'e').ports;
-    for (const port of ['a', 'b', 'c', 'd']) expect(bucket.find((p) => p.port === port)!.z).toBe(4);
-    expect(bucket.find((p) => p.port === 'f')!.z).toBe(0);
-    expect(cat.get('BKT').routes.a).toEqual(['b']);
-    expect(cat.get('BKT').routes.c).toEqual(['d']);
+  it('the bucket is a 4-way crossing at level 4 and has no track of its own underneath', () => {
+    const t = cat.get('BKT');
+    expect(t.ports.map((p) => p.id).sort()).toEqual(['a', 'b', 'c', 'd']);
+    for (const p of t.ports) expect(p.z, p.id).toBe(4);
+    expect(t.routes.a).toEqual(['b']);
+    expect(t.routes.c).toEqual(['d']);
+    // attached by a top corner, it still stands on the floor
+    expect(placeAt(cat, startPose(), 'BKT', 'a').piece.z).toBe(0);
   });
 
   it('the bucket tracks run corner to corner 120° apart, and the tunnel bisects that angle', () => {
@@ -213,7 +215,7 @@ describe('elevation', () => {
     const S1 = cat.params.straight;
     const half = (Math.sqrt(3) / 4) * S1;
     const short = S1 / 2;
-    // ends sit on the four corners of the footprint (tunnel axis = x, half a straight across)
+    // ends sit on the four corners of the footprint (the tunnel runs along x, across the short side)
     for (const [id, x, y] of [
       ['a', 0, -half],
       ['b', short, half],
@@ -226,41 +228,39 @@ describe('elevation', () => {
     // each top track is as long as a standard straight
     expect(Math.hypot(port('b').x - port('a').x, port('b').y - port('a').y)).toBeCloseTo(S1);
     expect(Math.hypot(port('d').x - port('c').x, port('d').y - port('c').y)).toBeCloseTo(S1);
-    // heading of each top track (its far end faces the way the track runs)
+    // the top tracks are 120° apart and the tunnel (heading 0) bisects that angle
     const ab = port('b').dir;
     const cd = port('d').dir;
     expect(Math.abs(angleDiff(ab, cd))).toBeCloseTo(120);
-    // the tunnel runs along the bisector of the 120° angle
-    const tunnel = port('f').dir;
-    expect(Math.abs(angleDiff(ab, tunnel))).toBeCloseTo(60);
-    expect(Math.abs(angleDiff(cd, tunnel))).toBeCloseTo(60);
+    expect(Math.abs(angleDiff(ab, 0))).toBeCloseTo(60);
+    expect(Math.abs(angleDiff(cd, 0))).toBeCloseTo(60);
     // the solid body is the √3 : 1 footprint
     expect(t.bodyRect!.h / t.bodyRect!.w).toBeGreaterThan(1.5);
   });
 
   it('the lid and the bucket are separate pieces in the inventory', () => {
     const lid = placeAt(cat, startPose(0, 0, 0, 1), 'XB', 'a').piece;
-    const bucket = placeAt(cat, startPose(2000, 0), 'BKT', 'e').piece;
+    const bucket = placeAt(cat, startPose(2000, 0), 'BKT', 'a').piece;
     const v = validateLayout(cat, [lid, bucket], { owned: { XB: 1, BKT: 1 } });
     expect(v.counts).toEqual({ XB: 1, BKT: 1 });
     expect(v.issues.some((i) => i.rule === 'shortage')).toBe(false);
   });
 
-  it('ground track can pass through the bucket tunnel but not through its sides', () => {
-    const bucket = placeAt(cat, startPose(), 'BKT', 'e').piece;
+  it('the bucket stands over two tracks side by side, but not over track outside its tunnel', () => {
+    const bucket: PlacedPiece = { uid: 'bucket', code: 'BKT', x: 0, y: 0, rot: 0, z: 0 };
     const S1 = cat.params.straight;
-    // track joined to both tunnel mouths runs through underneath
-    const before = placeChain(cat, startPose(-S1, 0, 0), [S]).pieces;
-    const after = placeChain(cat, startPose(S1 / 2, 0, 0), [S]).pieces;
-    const v = validateLayout(cat, [bucket, ...before, ...after]);
-    expect(v.issues.some((i) => i.rule === 'overlap')).toBe(false);
-    expect(v.conn.links.size).toBe(4);
-    // straight running across the bucket sideways at ground level
-    const across = placeChain(cat, startPose(S1 / 4, -S1, 90), [S, S]).pieces;
-    expect(validateLayout(cat, [bucket, ...across]).issues.some((i) => i.rule === 'overlap')).toBe(true);
-    // the same at level 4 (on top) is fine only if it lines up with the lid; at level 2 it hits the bucket
-    const mid = placeChain(cat, startPose(S1 / 4, -S1, 90, 2), [S, S]).pieces;
-    expect(validateLayout(cat, [bucket, ...mid]).issues.some((i) => i.rule === 'overlap')).toBe(true);
+    const lane = cat.params.parallelSpacing;
+    const under = (y: number) => placeChain(cat, startPose(-S1 / 4, y, 0), [S]).pieces;
+    const overlaps = (pieces: PlacedPiece[]) => validateLayout(cat, [bucket, ...pieces]).issues.some((i) => i.rule === 'overlap');
+    // one track through the middle, or two tracks one lane apart, fit underneath
+    expect(overlaps(under(0))).toBe(false);
+    expect(overlaps([...under(-lane / 2), ...under(lane / 2)])).toBe(false);
+    // a third track, or a track a full lane off-centre, hits the tunnel's side walls
+    expect(overlaps([...under(-lane), ...under(0), ...under(lane)])).toBe(true);
+    expect(overlaps(under(lane))).toBe(true);
+    // track running across the bucket sideways hits it at ground level and at level 2
+    expect(overlaps(placeChain(cat, startPose(S1 / 4, -S1, 90), [S, S]).pieces)).toBe(true);
+    expect(overlaps(placeChain(cat, startPose(S1 / 4, -S1, 90, 2), [S, S]).pieces)).toBe(true);
   });
 
   it('supports of each height are matched to raised joints', () => {

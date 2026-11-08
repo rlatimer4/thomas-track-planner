@@ -59,6 +59,15 @@ export const TrackPiece = memo(function TrackPiece({ cat, piece, selected, probl
           strokeWidth={3}
         />
       )}
+      {t.bodyRect?.tunnel &&
+        [-1, 1].map((side) => {
+          const r = t.bodyRect!;
+          const y = side * r.tunnel!;
+          const a = applyTransform(piece, { x: r.x, y });
+          const b = applyTransform(piece, { x: r.x + r.w, y });
+          // dashed edges of the tunnel opening underneath
+          return <line key={side} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#64748b" strokeWidth={3} strokeDasharray="10 8" />;
+        })}
       {paths
         .map((s, i) => ({ s, i }))
         // draw the lowest paths first so a tunnel shows underneath the crossing
