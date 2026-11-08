@@ -1,9 +1,9 @@
 /// <reference lib="webworker" />
-import { Catalog, generateLayouts, type AutoGenOptions, type CustomPieceDef, type GeometryParams } from '../core';
+import { Catalog, generateLayouts, type AutoGenOptions, type PieceSpec, type GeometryParams } from '../core';
 
 export interface AutoGenRequest {
   params: GeometryParams;
-  customPieces: CustomPieceDef[];
+  customPieces: PieceSpec[];
   options: AutoGenOptions;
 }
 

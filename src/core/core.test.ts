@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   BUILTIN_KITS,
+  checkSpec,
+  fromLegacyCustom,
+  makeLayoutFile,
+  mergePieces,
+  newLayout,
+  parseLayoutFile,
+  parsePartsFile,
+  makePartsFile,
+  type PieceSpec,
   DEFAULT_PARAMS,
   operationalChecks,
   type Connectivity,
@@ -28,7 +37,7 @@ const L: ChainStep = step('C', 'rev');
 const S: ChainStep = step('S1');
 
 function oval(straights = 2) {
-  const half = [R, R, R, R, ...Array(straights).fill(S)];
+  const half = [R, R, R, ...Array(straights).fill(S)];
   return placeChain(cat, startPose(), [...half, ...half]).pieces;
 }
 
@@ -37,8 +46,8 @@ describe('catalog', () => {
     for (const t of cat.trackPieces()) expect(t.ports.length).toBeGreaterThan(0);
   });
 
-  it('8 curves make a circle', () => {
-    const { end } = placeChain(cat, startPose(), Array(8).fill(R));
+  it('6 standard curves (60° each) make a circle', () => {
+    const { end } = placeChain(cat, startPose(), Array(6).fill(R));
     expect(Math.hypot(end.x, end.y)).toBeLessThan(1e-6);
     expect(Math.round(end.dir) % 360).toBe(0);
   });
@@ -108,7 +117,7 @@ describe('validation', () => {
   });
 
   it('flags shortages against inventory', () => {
-    const v = validateLayout(cat, oval(), { owned: { C: 6, S1: 4 } });
+    const v = validateLayout(cat, oval(), { owned: { C: 5, S1: 4 } });
     expect(v.issues.some((i) => i.rule === 'shortage')).toBe(true);
   });
 
@@ -136,8 +145,8 @@ describe('elevation', () => {
   it('AL turns left and AR turns right while climbing, by one curve each', () => {
     const al = placeChain(cat, startPose(), [step('AL')]);
     const ar = placeChain(cat, startPose(), [step('AR')]);
-    expect(Math.round(angleDiff(al.end.dir, 0))).toBe(-45);
-    expect(Math.round(angleDiff(ar.end.dir, 0))).toBe(45);
+    expect(Math.round(angleDiff(al.end.dir, 0))).toBe(-60);
+    expect(Math.round(angleDiff(ar.end.dir, 0))).toBe(60);
     expect(al.end.z).toBe(1);
     expect(ar.end.z).toBe(1);
     // same plan shape as a C curve
@@ -148,7 +157,7 @@ describe('elevation', () => {
 
   it('going down a ramp turns the other way', () => {
     const down = placeChain(cat, startPose(0, 0, 0, 1), [step('AL', 'rev')]);
-    expect(Math.round(angleDiff(down.end.dir, 0))).toBe(45);
+    expect(Math.round(angleDiff(down.end.dir, 0))).toBe(60);
     expect(down.end.z).toBe(0);
   });
 
@@ -404,8 +413,8 @@ describe('operating checks', () => {
 
 describe('running analysis', () => {
   it('a spur ending in a buffer is a dead end but the loop still runs', () => {
-    const half = [R, R, R, R, S, S];
-    const { pieces } = placeChain(cat, startPose(), [...half, R, R, R, R, step('TR'), S]);
+    const half = [R, R, R, S, S];
+    const { pieces } = placeChain(cat, startPose(), [...half, R, R, R, step('TR'), S]);
     const sw = pieces[pieces.length - 2];
     const c = worldPorts(cat, sw).find((p) => p.port === 'c')!;
     const buf = placeAt(cat, c, 'BS1', 'a').piece;
@@ -422,11 +431,12 @@ describe('kits and inventory', () => {
     for (const k of BUILTIN_KITS) for (const code of Object.keys(k.pieces)) expect(cat.has(code), `${k.id}:${code}`).toBe(true);
   });
 
-  it('GLK80 has 25 track pieces counting the bridge as two halves', () => {
+  it('GLK80 has 23 track pieces, and the bridge is a support', () => {
     const k = BUILTIN_KITS.find((x) => x.id === 'GLK80')!;
     const track = Object.entries(k.pieces).filter(([c]) => cat.get(c).isTrack);
-    const n = track.reduce((a, [c, v]) => a + (c === 'VB' ? 2 : v), 0);
-    expect(n).toBe(25);
+    const n = track.reduce((a, [, v]) => a + v, 0);
+    expect(n).toBe(23);
+    expect(cat.get('VB').category).toBe('support');
   });
 
   it('HNP81 has 23 track pieces plus the junction base, lid and bucket', () => {
@@ -446,8 +456,8 @@ describe('kits and inventory', () => {
 
 describe('autogen', () => {
   it('finds closing curve words', () => {
-    const words = closingWords(10, 45, true);
-    expect(words.some((w) => w.length === 8 && w.every((t) => t === 1))).toBe(true);
+    const words = closingWords(8, 60, true);
+    expect(words.some((w) => w.length === 6 && w.every((t) => t === 1))).toBe(true);
   });
 
   it('generates valid layouts from the two kits', () => {
@@ -477,4 +487,129 @@ describe('autogen', () => {
     expect(res.length).toBeGreaterThan(0);
     expect(res[0].features).toContain('Crosses over itself');
   }, 20000);
+});
+
+describe('piece definitions (paths)', () => {
+  const P = DEFAULT_PARAMS;
+  it('an offset path ends one lane over, facing the same way', () => {
+    const c = cat.get('PR').ports.find((q) => q.id === 'c')!;
+    expect(c.x).toBeCloseTo(P.straight);
+    expect(c.y).toBeCloseTo(P.parallelSpacing);
+    expect(c.dir).toBeCloseTo(0);
+  });
+
+  it('a custom 60° crossing is built from two straight paths', () => {
+    const spec: PieceSpec = {
+      code: 'X60',
+      name: '60° crossing',
+      category: 'crossing',
+      description: '',
+      color: '#000',
+      paths: [
+        { from: 'a', to: 'b' },
+        { from: 'c', to: 'd', start: { along: 0.25, side: -0.433, heading: 60 } },
+      ],
+    };
+    expect(checkSpec(spec)).toEqual([]);
+    const t = new Catalog(DEFAULT_PARAMS, [spec]).get('X60');
+    expect(t.ports.map((q) => q.id).sort()).toEqual(['a', 'b', 'c', 'd']);
+    expect(t.routes.a).toEqual(['b']);
+    expect(t.routes.c).toEqual(['d']);
+  });
+
+  it('flags paths that share an end but don’t meet there', () => {
+    const bad: PieceSpec = {
+      code: 'BAD',
+      name: 'Bad',
+      category: 'switch',
+      description: '',
+      color: '#000',
+      paths: [
+        { from: 'a', to: 'b' },
+        { from: 'a', to: 'b', turn: 60 },
+      ],
+    };
+    expect(checkSpec(bad).some((e) => e.includes('End "b"'))).toBe(true);
+    expect(checkSpec({ ...bad, paths: [{ from: 'a', to: 'b', turn: 60, offset: 1 }] }).some((e) => e.includes('turn or an offset'))).toBe(
+      true,
+    );
+  });
+
+  it('climbing pieces can start raised and climb several levels', () => {
+    const spec: PieceSpec = {
+      code: 'UP2',
+      name: 'Big climb',
+      category: 'ramp',
+      description: '',
+      color: '#000',
+      paths: [{ from: 'a', to: 'b', length: 2, level: 1, rise: 2 }],
+    };
+    const t = new Catalog(DEFAULT_PARAMS, [spec]).get('UP2');
+    expect(t.ports.find((q) => q.id === 'a')!.z).toBe(1);
+    expect(t.ports.find((q) => q.id === 'b')!.z).toBe(3);
+    expect(t.ports.find((q) => q.id === 'b')!.x).toBeCloseTo(2 * P.straight);
+  });
+
+  it('old custom pieces are converted to paths', () => {
+    const spec = fromLegacyCustom({ code: 'C45', name: '45° curve', kind: 'curve', angle: 45 });
+    expect(spec.paths).toEqual([{ from: 'a', to: 'b', turn: 45, radius: 1 }]);
+    const c = new Catalog(DEFAULT_PARAMS, [{ code: 'C45', name: '45° curve', kind: 'curve', angle: 45 }]);
+    expect(c.has('C45')).toBe(true);
+  });
+
+  it('the bridge holds both ends of a straight two levels up', () => {
+    const span = placeChain(cat, startPose(0, 0, 0, 2), [S]).pieces;
+    const v = validateLayout(cat, span, { owned: { S1: 1, VB: 1 } });
+    expect(v.supports.unsupported).toEqual({});
+    expect(v.supports.used).toEqual({ VB: 1 });
+  });
+});
+
+describe('sharing', () => {
+  const mine: PieceSpec = {
+    code: 'S2',
+    name: 'Half straight',
+    category: 'straight',
+    description: '',
+    color: '#000',
+    paths: [{ from: 'a', to: 'b', length: 0.5 }],
+    custom: true,
+  };
+
+  it('merges pieces: adds new ones, keeps or replaces conflicts, never overrides built-ins', () => {
+    const builtins = new Set(
+      cat
+        .all()
+        .filter((t) => !t.custom)
+        .map((t) => t.code),
+    );
+    const changed = { ...mine, paths: [{ from: 'a', to: 'b', length: 0.25 }] };
+    const r1 = mergePieces([mine], [changed, { ...mine, code: 'S4' }, { ...mine, code: 'C' }], builtins);
+    expect(r1.added).toEqual(['S4']);
+    expect(r1.conflicts.sort()).toEqual(['C', 'S2']);
+    expect(r1.merged.find((p) => p.code === 'S2')!.paths![0].length).toBe(0.5);
+    const r2 = mergePieces([mine], [changed], builtins, true);
+    expect(r2.merged.find((p) => p.code === 'S2')!.paths![0].length).toBe(0.25);
+    expect(mergePieces([mine], [mine], builtins).unchanged).toEqual(['S2']);
+  });
+
+  it('layout files carry the custom pieces they use', () => {
+    const c2 = new Catalog(DEFAULT_PARAMS, [mine]);
+    const layout = { ...newLayout('x'), pieces: placeChain(c2, startPose(), [step('S1'), step('S2')]).pieces };
+    const file = makeLayoutFile(layout, c2);
+    expect(file.pieces.map((p) => p.code)).toEqual(['S2']);
+    const back = parseLayoutFile(JSON.stringify(file));
+    expect(back.pieces[0].paths).toEqual(mine.paths);
+    expect(back.layout.pieces.length).toBe(2);
+    // older files without piece definitions still load
+    expect(parseLayoutFile(JSON.stringify({ format: 'track-planner-layout', version: 1, layout })).pieces).toEqual([]);
+  });
+
+  it('parts files round-trip pieces and custom kits', () => {
+    const kit = { id: 'MYKIT', name: 'Mine', pieces: { S2: 4 }, custom: true };
+    const back = parsePartsFile(JSON.stringify(makePartsFile([mine], [...BUILTIN_KITS, kit])));
+    expect(back.pieces[0].code).toBe('S2');
+    expect(back.kits.map((k) => k.id)).toEqual(['MYKIT']);
+    expect(() => parsePartsFile('{"format":"other"}')).toThrow();
+  });
 });

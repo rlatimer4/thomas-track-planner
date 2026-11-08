@@ -124,7 +124,10 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
     if (selfSupported) continue;
     needed[level] = (needed[level] ?? 0) + 1;
   }
-  const avail: Counts = { ...(owned ?? {}) };
+  // supports that hold several joints (the bridge holds both ends of a straight) count once per joint
+  const held = (code: string) => (cat.has(code) ? (cat.get(code).jointsHeld ?? 1) : 1);
+  const avail: Counts = Object.fromEntries(Object.entries(owned ?? {}).map(([c, n]) => [c, n * held(c)]));
+  const usedJoints: Counts = {};
   const used: Counts = {};
   const unsupported: Record<number, number> = {};
   const levels = Object.keys(needed)
@@ -201,10 +204,11 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
       }
       for (const [c, n] of Object.entries(choice)) {
         avail[c] -= n;
-        used[c] = (used[c] ?? 0) + n;
+        usedJoints[c] = (usedJoints[c] ?? 0) + n;
       }
     }
   }
+  for (const [c, n] of Object.entries(usedJoints)) used[c] = Math.ceil(n / held(c));
   return { needed, used, unsupported };
 }
 

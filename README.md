@@ -20,7 +20,7 @@ the design logic has no platform dependencies, so the same code can later ship a
 | **Build** | Tap a piece in the palette to add it. New pieces attach to the selected (orange) open end, and the next end is selected automatically, so you can keep tapping. **Turn** (or `F`) re-attaches the last piece the other way: a curve turns left instead of right, a ramp goes down instead of up, a switch is entered by a different leg. Tap a green end to build from it. Drag a piece to move it; it snaps when an end comes near another. `R` rotates, `Del` removes, `Ctrl+Z`/`Ctrl+Shift+Z` undo and redo. |
 | **Auto design** | Choose a shape (any, loops only, figure-8), the features you want (sidings, station, hills) and, optionally, the space you have. It generates and ranks layouts. Hover the score to see how it was worked out. **Open in builder** to edit one. |
 | **My track** | Set how many of each kit you own, or adjust loose pieces with + / − (negative numbers record lost pieces). You can also define your own kits. |
-| **Catalog** | Every piece with its connectors, size and description. You can add custom pieces (straight, curve, switch, ramp, buffer, support). |
+| **Catalog** | Every piece with its ends and paths. Add, edit, copy and share custom pieces and kits. See [Adding new track pieces](docs/ADDING_PIECES.md). |
 | **Settings** | Units (cm/in); your space; trains (engines running at once, longest train, engine width, headroom, how switches behave); track geometry calibration. |
 
 The **Checks** panel updates as you build. Hover or tap a check to highlight the pieces involved.
@@ -48,12 +48,18 @@ saves a printable drawing.
 
 ## Track system model
 
-- **Connectors.** TrackMaster ends are genderless: any end joins any other end at the same height.
-- **Geometry** (Settings → calibration; defaults are estimates, not published figures):
-  standard straight `S1` 21 cm, curve `C` radius 20 cm turning 45° (8 make a circle).
-  Switches' straight legs equal a straight, and their branches equal a curve, so switches can replace straights anywhere.
-  `PR`/`PL` offset switches shift the branch sideways by the lane spacing and end parallel, which is how the GLK80 loading station
-  is fed.
+The track standard is in `src/core/standards.ts`, and every piece is described against it (see
+[Adding new track pieces](docs/ADDING_PIECES.md)):
+
+- **Curves turn 60°**, so 6 make a circle. This matches the GLK80/HNP81 layout diagrams, where each half-circle is 3 curves, and
+  the TrackMaster curve packs.
+- **Switches:** the straight leg is one straight and the branch is one standard curve. **Offset switches** (`PR`/`PL`) shift one
+  lane sideways and end parallel, which is how the GLK80 loading station is fed.
+- **Pieces are paths.** Each way through a piece is described by how it turns (degrees), its length (in straights), any
+  sideways offset (in lanes) and how much it climbs (in levels).
+- **Units** (Settings → calibration; defaults are estimates, not published figures): straight S = 21 cm, curve radius R = 20 cm,
+  lane = 7 cm.
+- **Connectors** are genderless: any end joins any other end at the same height.
 - **Joint play.** Real toy track has a little slack. Ends within 12 mm and 4° count as connected (configurable). The auto designer
   only closes loops within 9 mm.
 
@@ -70,7 +76,7 @@ Height is counted in **levels**. Ground is level 0, and each support height is o
 | `RS1`, `RS2`, `RS3` | Supports for levels 1, 2 and 3. Used in pairs (one column each side) with a `D1` deck under the joint. They stack: two `RS1` equal one `RS2`, and `RS2` + `RS1` reach level 3 |
 | `XB` | Bucket lid: a 3-way fork (left, straight, right) standing one level up on its own legs. Ramp up to it |
 | `BKT` | Track bucket: a 4-way crossing on top at level 4, with a ground-level tunnel through it |
-| `VB` | Lift bridge: holds itself up when raised |
+| `VB` | Vicarstown lift bridge: carries a straight at level 2, holding both of its ends, so track can pass underneath |
 
 How it's checked:
 - Joints connect only at the same level; otherwise it's a **height mismatch**.
@@ -97,14 +103,13 @@ base) are marked **estimated** in the catalog. Measure yours and calibrate in Se
 
 ## How auto design works
 
-1. **Main line.** All curves turn by the same angle, and straight-like pieces (straights, switch legs, station lanes, ramps) are
-   multiples of half a straight. So a closed loop is a sequence of left/right curves (a "turn word") plus straight runs at known
+1. **Main line.** All curves turn by the standard angle (60°, or whatever the C curve is defined as), and straight-like pieces
+   (straights, switch legs, station lanes) are multiples of half a straight. So a closed loop is a sequence of left/right curves (a "turn word") plus straight runs at known
    headings. For each turn word, the generator solves for run lengths that cancel the curves' offset (within the joint play) and
    picks from your inventory. Loops turn 360° in total. Figure-8s turn 0° and must cross on a raised section.
 2. **Elevation.** Some curves of the loop become climbing curves (`AL`/`AR`/`AR1`), in a balanced up/down sequence that never
    goes below ground or above level 3. A right-hand bend can climb on an `AR` or descend on an `AL`, and vice versa.
-   Raised straights use support-tab pieces (`TU4`, `ES3`, `CU4`) when available, and two raised straights can become the lift
-   bridge.
+   Raised straights use support-tab pieces (`TU4`, `ES3`, `CU4`) when available.
 3. **Decoration.** Straights on the finished loop are swapped for same-length pieces: offset-switch double track, the two-lane
    station, passing loops (switch pairs joined by a short search for connecting track) and sidings ending in buffer stops.
 4. **Checking and ranking.** Every candidate goes through the same validator as the builder and is scored on: pieces used,
@@ -137,13 +142,17 @@ The **Desktop builds** GitHub Action builds Windows, macOS and Linux installers.
 
 ```
 src/core/     platform-independent logic (no DOM, no React) — reusable on mobile
+  standards.ts  the track standard (60° curves, lanes, levels, headroom) and measuring guide
+  pieces.ts     built-in pieces, described as paths in standard units
+  catalog.ts    path definitions → ends, routes and shapes, using the calibrated units
   geometry.ts   2D math, turtle paths
-  catalog.ts    piece definitions built from calibration parameters
   kits.ts       kit contents
   inventory.ts  owned kits + loose pieces
   layout.ts     placed pieces, ports, connectivity
   graph.ts      train-running analysis (loops, dead ends, reversing loops)
   validate.ts   checks and support planning
+  operations.ts running checks (turning, reachability, conflicts, siding lengths, stops)
+  sharing.ts    parts files and layout files that carry their custom pieces
   autogen.ts    auto design
   svg.ts        SVG export
 src/ui/       React UI (builder canvas, inventory, catalog, auto design, settings)

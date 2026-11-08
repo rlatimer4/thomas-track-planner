@@ -6,6 +6,9 @@ import {
   dirVec,
   layoutBounds,
   layoutToSvg,
+  makeLayoutFile,
+  mergePieces,
+  parseLayoutFile,
   newLayout,
   placeAt,
   portKey,
@@ -34,8 +37,9 @@ interface View {
 const MAX_HISTORY = 200;
 
 export function Builder() {
-  const { catalog: cat, owned, currentLayout, saveLayout, update, layouts, units, space } = useStore();
-  const [pieces, setPiecesRaw] = useState<PlacedPiece[]>(currentLayout.pieces);
+  const { catalog: cat, owned, currentLayout, saveLayout, update, layouts, units, space, customPieces } = useStore();
+  // pieces whose definition is gone (e.g. a deleted custom piece) are left out rather than breaking the view
+  const [pieces, setPiecesRaw] = useState<PlacedPiece[]>(() => currentLayout.pieces.filter((p) => cat.has(p.code)));
   const [past, setPast] = useState<PlacedPiece[][]>([]);
   const [future, setFuture] = useState<PlacedPiece[][]>([]);
   const [sel, setSel] = useState<Selection>(null);
@@ -342,7 +346,7 @@ export function Builder() {
   const exportJson = () =>
     saveTextFile(
       `${currentLayout.name.replace(/[^\w-]+/g, '_')}.track.json`,
-      JSON.stringify({ format: 'track-planner-layout', version: 1, layout: { ...currentLayout, pieces } }, null, 2),
+      JSON.stringify(makeLayoutFile({ ...currentLayout, pieces }, cat), null, 2),
       'Track layout',
       'json',
     );
@@ -351,13 +355,25 @@ export function Builder() {
     const text = await openTextFile('Track layout', 'json');
     if (!text) return;
     try {
-      const data = JSON.parse(text);
-      const l: Layout = data.layout ?? data;
-      if (!Array.isArray(l.pieces)) throw new Error('No pieces');
-      const unknown = l.pieces.filter((p) => !cat.has(p.code)).map((p) => p.code);
-      if (unknown.length) throw new Error(`Unknown piece codes: ${[...new Set(unknown)].join(', ')}`);
-      const imported: Layout = { ...newLayout(l.name ?? 'Imported layout'), pieces: l.pieces };
-      update((s) => ({ ...s, layouts: [...s.layouts, imported], currentLayoutId: imported.id }));
+      const file = parseLayoutFile(text);
+      // bring in any custom pieces the layout needs; existing pieces with the same code are kept
+      const builtins = new Set(
+        cat
+          .all()
+          .filter((t) => !t.custom)
+          .map((t) => t.code),
+      );
+      const merge = mergePieces(customPieces, file.pieces, builtins);
+      const known = new Set([...builtins, ...merge.merged.map((p) => p.code)]);
+      const unknown = [...new Set(file.layout.pieces.filter((p) => !known.has(p.code)).map((p) => p.code))];
+      if (unknown.length) throw new Error(`It uses pieces this app doesn't know: ${unknown.join(', ')}.`);
+      const imported: Layout = { ...newLayout(file.layout.name ?? 'Imported layout'), pieces: file.layout.pieces };
+      update((s) => ({ ...s, customPieces: merge.merged, layouts: [...s.layouts, imported], currentLayoutId: imported.id }));
+      const notes = [
+        merge.added.length ? `Added custom pieces: ${merge.added.join(', ')}.` : '',
+        merge.conflicts.length ? `Kept your own version of: ${merge.conflicts.join(', ')} (the file's version differs).` : '',
+      ].filter(Boolean);
+      if (notes.length) alert(notes.join('\n'));
     } catch (err) {
       alert(`Could not import: ${(err as Error).message}`);
     }

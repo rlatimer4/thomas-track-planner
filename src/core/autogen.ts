@@ -161,7 +161,7 @@ export function piecePools(cat: Catalog): Pools {
     const chord = Math.hypot(hi.x - lo.x, hi.y - lo.y);
     const [ca, cb] = C.ports;
     const cChord = Math.hypot(ca.x - cb.x, ca.y - cb.y);
-    if (Math.abs(Math.abs(turn) - cat.params.curveAngle) > 0.5 || Math.abs(chord - cChord) > 0.5) return 0;
+    if (Math.abs(Math.abs(turn) - cat.standardTurn()) > 0.5 || Math.abs(chord - cChord) > 0.5) return 0;
     if (lo.id !== 'a') return 0; // generator enters ramps at 'a' to climb
     return Math.sign(turn);
   };
@@ -341,27 +341,36 @@ function planLoop(
   if (!climbs) return undefined;
   const runsOf = (k: number) => headings.map((h, i) => (h === k ? i : -1)).filter((i) => i >= 0);
 
-  // Solve sum_k net_k * unit * e_k = -(dx, dy), where net_k = T_k - T_{k+half} for k < half.
-  // Only the 8-direction (45°) case gets the fast solver; other angles need exact closure.
+  // Solve sum_k net_k * unit * e_k = -(dx, dy), where e_k is the direction of heading k and
+  // net_k = T_k - T_{k+half} is the straight length in heading k minus the opposite heading.
+  // Straights are 2 units long, so nets are even. Enumerate the nets of headings 1..half-1 and
+  // pick heading 0's net to cancel x; keep combinations that also cancel y within tolerance.
   const solutions: number[][] = [];
-  if (g.perCircle === 8) {
-    const r2 = Math.SQRT1_2;
-    const tx = -dx / g.unit;
-    const ty = -dy / g.unit;
-    for (let n1 = -8; n1 <= 8; n1++)
-      for (let n3 = -8; n3 <= 8; n3++) {
-        const n0f = tx - (n1 - n3) * r2;
-        const n2f = ty - (n1 + n3) * r2;
-        for (const n0 of [Math.floor(n0f), Math.ceil(n0f)])
-          for (const n2 of [Math.floor(n2f), Math.ceil(n2f)]) {
-            const ex = (n0 + (n1 - n3) * r2 - tx) * g.unit;
-            const ey = (n2 + (n1 + n3) * r2 - ty) * g.unit;
-            if (Math.hypot(ex, ey) <= g.tolerance) solutions.push([n0, n1, n2, n3]);
-          }
+  const step = 360 / g.perCircle;
+  const dirs = Array.from({ length: half }, (_, k) => ({
+    x: Math.cos((k * step * Math.PI) / 180),
+    y: Math.sin((k * step * Math.PI) / 180),
+  }));
+  const tx = -dx / g.unit;
+  const ty = -dy / g.unit;
+  const range = half <= 3 ? 8 : 5;
+  const nets = Array(half).fill(0);
+  const search = (k: number, sx: number, sy: number) => {
+    if (k === half) {
+      const n0f = tx - sx;
+      for (const n0 of [2 * Math.floor(n0f / 2), 2 * Math.ceil(n0f / 2)]) {
+        const ex = (n0 + sx - tx) * g.unit;
+        const ey = (sy - ty) * g.unit;
+        if (Math.hypot(ex, ey) <= g.tolerance) solutions.push([n0, ...nets.slice(1)]);
       }
-  } else if (Math.hypot(dx, dy) < 1e-6) {
-    solutions.push(Array(half).fill(0));
-  }
+      return;
+    }
+    for (let m = -range; m <= range; m++) {
+      nets[k] = 2 * m;
+      search(k + 1, sx + 2 * m * dirs[k].x, sy + 2 * m * dirs[k].y);
+    }
+  };
+  if (half >= 1) search(1, 0, 0);
   if (!solutions.length) return undefined;
 
   for (const net of shuffle(rng, solutions).slice(0, 6)) {
@@ -704,29 +713,6 @@ function addSpur(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): boolean 
   return false;
 }
 
-function addBridge(cat: Catalog, st: DecorState): boolean {
-  // swap two consecutive raised straights for the self-supporting bridge
-  if (!cat.has('VB') || (st.avail.VB ?? 0) < 1) return false;
-  const byUid = new Map(st.pieces.map((p) => [p.uid, p]));
-  for (let i = 0; i + 1 < st.order.length; i++) {
-    const a = byUid.get(st.order[i]);
-    const b = byUid.get(st.order[i + 1]);
-    if (!a || !b) continue;
-    const isS = (p: PlacedPiece) => cat.get(p.code).category === 'straight';
-    if (!isS(a) || !isS(b) || a.z < 1 || b.z < 1) continue;
-    const vb = replaceInline(cat, st, a.uid, 'VB', 'a');
-    const next = st.pieces.filter((p) => p.uid !== b.uid).map((p) => (p.uid === a.uid ? vb : p));
-    if (!tryCommit(cat, st, next)) continue;
-    st.avail.VB--;
-    st.avail[a.code] = (st.avail[a.code] ?? 0) + 1;
-    st.avail[b.code] = (st.avail[b.code] ?? 0) + 1;
-    st.order = st.order.filter((u) => u !== b.uid);
-    st.features.push('Lift bridge on the raised section');
-    return true;
-  }
-  return false;
-}
-
 // ---------------------------------------------------------------- scoring
 
 function scoreCandidate(cat: Catalog, pieces: PlacedPiece[], owned: Counts, features: string[], word: TurnWord) {
@@ -776,7 +762,7 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
   const nStraight = poolCount(owned, pools.straight);
   const rampsOwned = { 1: poolCount(owned, pools.rampByTurn[1]), [-1]: poolCount(owned, pools.rampByTurn[-1]) };
   const nRamp = rampsOwned[1] + rampsOwned[-1];
-  const angle = cat.params.curveAngle;
+  const angle = cat.standardTurn();
   const perCircle = Math.round(360 / angle);
   const style = opts.style ?? 'any';
   // climbing pieces are curves too, so they count towards the turns of a loop
@@ -829,7 +815,6 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
     const avail: Counts = { ...owned };
     for (const [c, n] of Object.entries(pieceCounts(built.pieces, cat))) avail[c] -= n;
     const st: DecorState = { pieces: built.pieces, order: built.order, avail, features: [] };
-    if (pairs > 0) addBridge(cat, st);
     if (opts.wantStation !== false && rng() < 0.8) addStation(cat, st, pools, rng, true) || addStation(cat, st, pools, rng, false);
     if (opts.wantSidings !== false) {
       if (rng() < 0.6) addSiding(cat, st, pools, rng);

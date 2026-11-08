@@ -23,18 +23,11 @@ const RUNNING: Field[] = [
 
 const FIELDS: Field[] = [
   { key: 'straight', label: 'Straight length (S1)', help: 'End-to-end length of a standard straight.', unit: 'len' },
-  { key: 'curveRadius', label: 'Curve radius (C)', help: 'Radius to the middle of the track on a standard curve.', unit: 'len' },
-  { key: 'curveAngle', label: 'Curve angle', help: 'How far one curve turns. 45° means 8 curves make a circle.', unit: 'deg' },
-  {
-    key: 'rampLength',
-    label: 'Straight ramp length',
-    help: 'Default floor length for custom straight ramps. (AL/AR/AR1 are climbing curves shaped like a C curve.)',
-    unit: 'len',
-  },
+  { key: 'curveRadius', label: 'Curve radius (C)', help: 'R: radius to the middle of the track on a standard 60° curve.', unit: 'len' },
   {
     key: 'parallelSpacing',
-    label: 'Parallel track spacing',
-    help: 'Distance between the two lanes after an offset switch (PR/PL).',
+    label: 'Lane spacing',
+    help: 'One lane: distance between the two tracks after an offset switch (PR/PL), centre to centre.',
     unit: 'len',
   },
   { key: 'trackWidth', label: 'Track width', help: 'Width of the track bed, used to detect overlaps.', unit: 'len' },

@@ -4,10 +4,12 @@ import {
   Catalog,
   DEFAULT_PARAMS,
   EMPTY_INVENTORY,
+  fromLegacyCustom,
+  isLegacyCustom,
   inventoryTotals,
   newLayout,
   type Counts,
-  type CustomPieceDef,
+  type PieceSpec,
   type GeometryParams,
   type Inventory,
   type Kit,
@@ -27,7 +29,7 @@ export interface PersistedState {
   /** Floor/table space the layout should fit in, mm (null = not set). */
   space: Space | null;
   params: GeometryParams;
-  customPieces: CustomPieceDef[];
+  customPieces: PieceSpec[];
   customKits: Kit[];
   inventory: Inventory;
   layouts: Layout[];
@@ -49,6 +51,8 @@ function initialState(storage: StorageAdapter): PersistedState {
       space: saved.space ?? null,
       params,
       layouts: saved.layouts?.length ? saved.layouts : [newLayout('My first layout')],
+      // custom pieces from before path-based definitions are converted
+      customPieces: (saved.customPieces ?? []).map((c) => (isLegacyCustom(c) ? fromLegacyCustom(c) : c)),
     };
   }
   const first = newLayout('My first layout');
