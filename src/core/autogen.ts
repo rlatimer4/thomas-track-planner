@@ -49,6 +49,11 @@ export interface AutoGenOptions {
   wantSidings?: boolean;
   wantElevation?: boolean;
   wantStation?: boolean;
+  /**
+   * Use as many of the owned pieces as possible: the longest loops, extra straights, every climb, and as many
+   * stations, passing loops and sidings as fit, with pieces used weighted much more heavily in the score.
+   */
+  useAll?: boolean;
   /** Number of layouts to return. */
   results?: number;
   timeBudgetMs?: number;
@@ -331,7 +336,7 @@ function planLoop(
   rng: Rng,
   word: TurnWord,
   g: LoopGeometry,
-  budget: { straight: number; rampsOwned: Record<number, number> },
+  budget: { straight: number; rampsOwned: Record<number, number>; fill?: boolean },
   rampPairs: number,
 ): LoopPlan | undefined {
   const m = word.length;
@@ -386,7 +391,8 @@ function planLoop(
       const d = net[k] / 2;
       const A = runsOf(k);
       const B = runsOf(k + half);
-      const extra = A.length && B.length ? (rng() < 0.5 ? 0 : randInt(rng, 0, 2)) : 0;
+      // extra straights on both sides keep the loop closed; filling uses more of them
+      const extra = A.length && B.length ? (budget.fill ? randInt(rng, 0, 3) : rng() < 0.5 ? 0 : randInt(rng, 0, 2)) : 0;
       let sA = Math.max(d, 0) + extra;
       let sB = Math.max(-d, 0) + extra;
       if ((sA > 0 && !A.length) || (sB > 0 && !B.length)) {
@@ -793,6 +799,8 @@ function raisedShare(cat: Catalog, pieces: PlacedPiece[]): number {
 export const SCORE_WEIGHTS = {
   /** Points for using all the track you own (scaled by the share used). */
   piecesUsed: 60,
+  /** The same, when asked to use all the pieces. */
+  piecesUsedAll: 250,
   continuousRunning: 20,
   perFeature: 8,
   perCrossing: 30,
@@ -804,13 +812,13 @@ export const SCORE_WEIGHTS = {
   maxCompactness: 45,
 } as const;
 
-function scoreCandidate(cat: Catalog, pieces: PlacedPiece[], owned: Counts, features: string[]) {
+function scoreCandidate(cat: Catalog, pieces: PlacedPiece[], owned: Counts, features: string[], useAll = false) {
   const W = SCORE_WEIGHTS;
   const v = validateLayout(cat, pieces, { owned });
   const trackOwned = Object.entries(owned).reduce((a, [c, n]) => a + (cat.has(c) && cat.get(c).isTrack ? n : 0), 0);
   const used = pieces.length;
   const breakdown: Record<string, number> = {};
-  breakdown['Pieces used'] = Math.round(W.piecesUsed * Math.min(1, used / Math.max(1, trackOwned)));
+  breakdown['Pieces used'] = Math.round((useAll ? W.piecesUsedAll : W.piecesUsed) * Math.min(1, used / Math.max(1, trackOwned)));
   breakdown['Continuous running'] = v.running.onCycle.size > 0 ? W.continuousRunning : -50;
   breakdown['Track features'] = features.length * W.perFeature;
   // bridges: track crossing over other track
@@ -832,7 +840,7 @@ function scoreCandidate(cat: Catalog, pieces: PlacedPiece[], owned: Counts, feat
   const errors = v.issues.filter((i) => i.severity === 'error').length;
   breakdown['Errors'] = -100 * errors;
   const score = Object.values(breakdown).reduce((a, b) => a + b, 0);
-  return { score, breakdown, issues: v.issues, valid: errors === 0, crossings };
+  return { score, breakdown, issues: v.issues, valid: errors === 0, crossings, used, trackOwned };
 }
 
 function describe(word: TurnWord, features: string[], maxZ: number, crossings = 0): string {
@@ -885,13 +893,17 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
   const allWords = [...words, ...words.filter((w) => w.some((t) => t < 0)).map((w) => w.map((t) => -t))];
 
   const fig8Words = allWords.filter((w) => w.reduce((a, b) => a + b, 0) === 0);
+  const longest = Math.max(...allWords.map((w) => w.length));
+  const longWords = allWords.filter((w) => w.length >= longest - 1);
 
   const results = new Map<string, Candidate>();
   let attempts = 0;
   while (Date.now() - t0 < budgetMs && attempts < 20000) {
     attempts++;
     // figure-8s give a bridge crossing, so offer them often when any shape is allowed
-    const word = style === 'any' && fig8Words.length && rng() < 0.4 ? pick(rng, fig8Words) : pick(rng, allWords);
+    // to use all the pieces, mostly try the longest loops (they use every curve)
+    const pool = opts.useAll && rng() < 0.7 ? longWords : style === 'any' && fig8Words.length && rng() < 0.4 ? fig8Words : allWords;
+    const word = pick(rng, pool);
     const net = word.reduce((a, b) => a + b, 0);
     // figure-8s need a raised crossing; loops get a hill sometimes when asked
     const maxPairs = Math.min(Math.floor(nRamp / 2), 3);
@@ -900,13 +912,13 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
     const climbPairs = () => Math.max(randInt(rng, 1, maxPairs), randInt(rng, 1, maxPairs));
     if (net === 0) {
       if (maxPairs < 1) continue;
-      pairs = climbPairs();
-    } else if (opts.wantElevation !== false && maxPairs > 0 && rng() < 0.85) {
-      pairs = climbPairs();
+      pairs = opts.useAll ? maxPairs : climbPairs();
+    } else if (opts.wantElevation !== false && maxPairs > 0 && (opts.useAll || rng() < 0.85)) {
+      pairs = opts.useAll ? maxPairs : climbPairs();
     }
     // curves the word needs beyond the climbing ones must be plain curves
     if (word.length - 2 * pairs > nCurves) continue;
-    const plan = planLoop(rng, word, geom, { straight: nStraight, rampsOwned }, pairs);
+    const plan = planLoop(rng, word, geom, { straight: nStraight, rampsOwned, fill: opts.useAll }, pairs);
     if (!plan) continue;
     const built = buildLoop(cat, pools, plan, owned);
     if (!built) continue;
@@ -917,10 +929,14 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
     const avail: Counts = { ...owned };
     for (const [c, n] of Object.entries(pieceCounts(built.pieces, cat))) avail[c] -= n;
     const st: DecorState = { pieces: built.pieces, order: built.order, avail, features: [] };
-    if (opts.wantStation !== false && rng() < 0.8) addStation(cat, st, pools, rng, true) || addStation(cat, st, pools, rng, false);
+    const always = !!opts.useAll;
+    if (opts.wantStation !== false && (always || rng() < 0.8))
+      addStation(cat, st, pools, rng, true) || addStation(cat, st, pools, rng, false);
     if (opts.wantSidings !== false) {
-      if (rng() < 0.6) addSiding(cat, st, pools, rng);
-      if (rng() < 0.7) addSpur(cat, st, pools, rng);
+      if (always || rng() < 0.6) addSiding(cat, st, pools, rng);
+      if (always || rng() < 0.7) addSpur(cat, st, pools, rng);
+      // using all the pieces: keep adding sidings while there's room for them
+      if (always) for (let i = 0; i < 3 && addSpur(cat, st, pools, rng); i++);
     }
 
     // fit the space
@@ -940,7 +956,7 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
       b = layoutBounds(cat, pieces);
     }
 
-    const s = scoreCandidate(cat, pieces, owned, st.features);
+    const s = scoreCandidate(cat, pieces, owned, st.features, opts.useAll);
     if (!s.valid) continue;
     const maxZ = Math.max(0, ...pieces.map((p) => p.z + Math.max(...cat.get(p.code).ports.map((q) => q.z))));
     const counts = pieceCounts(pieces, cat);
@@ -955,6 +971,7 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
       pieces,
       score: s.score,
       features: [
+        `Uses ${s.used} of ${s.trackOwned} track pieces`,
         ...st.features,
         ...(maxZ > 0 ? [`Raised to level ${maxZ}`] : []),
         ...(net === 0 ? ['Crosses over itself'] : []),

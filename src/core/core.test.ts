@@ -613,6 +613,15 @@ describe('autogen', () => {
     for (const c of res) expect(c.breakdown['Compact']).toBeGreaterThan(0);
   }, 20000);
 
+  it('uses more of the pieces when asked to use all of them', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const avg = (useAll: boolean) => {
+      const res = generateLayouts(cat, { owned, timeBudgetMs: 2500, seed: 5, results: 4, useAll });
+      return res.reduce((a, c) => a + c.pieces.length, 0) / Math.max(1, res.length);
+    };
+    expect(avg(true)).toBeGreaterThan(avg(false));
+  }, 20000);
+
   it('respects the space limit', () => {
     const owned = inventoryTotals({ kits: { GLK80: 1 }, loose: {} }, BUILTIN_KITS);
     const res = generateLayouts(cat, { owned, timeBudgetMs: 1500, seed: 7, maxWidth: 1400, maxDepth: 900 });

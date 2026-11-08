@@ -18,7 +18,7 @@ the design logic has no platform dependencies, so the same code can later ship a
 | Tab | What it does |
 | --- | --- |
 | **Build** | Tap a piece in the palette to add it. New pieces attach to the selected (orange) open end, and the next end is selected automatically, so you can keep tapping. **Turn** (or `F`) re-attaches the last piece the other way: a curve turns left instead of right, a ramp goes down instead of up, a switch is entered by a different leg. Tap a green end to build from it. Drag a piece to move it; it snaps when an end comes near another. To work on several pieces, Shift+drag a box around them (or turn on **Select** and drag), Shift+click to add or remove one, or `Ctrl+A` for all; then drag, rotate, raise or remove them together. `R` rotates, `Del` removes, `Ctrl+Z`/`Ctrl+Shift+Z` undo and redo. |
-| **Auto design** | Choose a shape (any, loops only, figure-8), the features you want (sidings, station, hills) and, optionally, the space you have. It generates and ranks layouts. Hover the score to see how it was worked out. **Open in builder** to edit one. |
+| **Auto design** | Choose a shape (any, loops only, figure-8), the features you want (sidings, station, hills), whether to use all your pieces and, optionally, the space you have. It generates and ranks layouts. Hover the score to see how it was worked out. **Open in builder** to edit one. |
 | **My track** | Set how many of each kit you own, or adjust loose pieces with + / − (negative numbers record lost pieces). You can also define your own kits. |
 | **Catalog** | Every piece with its ends and paths. Add, edit, copy and share custom pieces and kits. See [Adding new track pieces](docs/ADDING_PIECES.md). |
 | **Settings** | Units (cm/in); your space; trains (engines running at once, longest train, engine width, headroom, how switches behave); track geometry calibration. |
@@ -139,7 +139,10 @@ has no "What's Included" list, the kit is counted from the labelled pieces in it
    - **Bridge crossings** score most: 30 points for each place track passes over other track with enough headroom (up to 3).
    - **Height:** 10 points per level the layout climbs to, plus up to 30 for how much of the track is raised.
    - **Compact:** up to 45 points for how densely the track fills its footprint.
-   - **Pieces used:** up to 60 points, by the share of your track the layout uses.
+   - **Pieces used:** up to 60 points, by the share of your track the layout uses. Each result says how many it uses.
+     **Use all my pieces** makes this count for up to 250 and builds bigger layouts: the longest loops, extra
+     straights, every climb, and as many sidings and passing loops as fit. Usually not every piece can be placed, since
+     the generator builds one main loop and some pieces (the bucket, the lid, offset switches) only fit particular spots.
    - Continuous running and features (station, sidings, passing loops) add to it. S-bends, warnings and unsupported joints
      count against it.
 

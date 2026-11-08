@@ -29,6 +29,7 @@ export function AutoView({ onOpen }: { onOpen: () => void }) {
   const [sidings, setSidings] = useState(true);
   const [elevation, setElevation] = useState(true);
   const [station, setStation] = useState(true);
+  const [useAll, setUseAll] = useState(false);
   const [seconds, setSeconds] = useState(3);
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<Candidate[] | null>(null);
@@ -49,6 +50,7 @@ export function AutoView({ onOpen }: { onOpen: () => void }) {
       wantSidings: sidings,
       wantElevation: elevation,
       wantStation: station,
+      useAll,
       maxWidth: limit ? parseLen(w, units) : undefined,
       maxDepth: limit ? parseLen(d, units) : undefined,
       results: 8,
@@ -96,6 +98,12 @@ export function AutoView({ onOpen }: { onOpen: () => void }) {
           </label>
           <label className="check">
             <input type="checkbox" checked={elevation} onChange={(e) => setElevation(e.target.checked)} /> Hills & bridges
+          </label>
+          <label
+            className="check"
+            title="Use as many of your pieces as fit: the biggest loops, every climb, and as many sidings and passing loops as possible."
+          >
+            <input type="checkbox" checked={useAll} onChange={(e) => setUseAll(e.target.checked)} /> Use all my pieces
           </label>
           <label className="check">
             <input type="checkbox" checked={limit} onChange={(e) => setLimit(e.target.checked)} /> Fit in a space
