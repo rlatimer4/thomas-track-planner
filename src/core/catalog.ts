@@ -82,6 +82,8 @@ export interface PieceSpec {
   cannotJoin?: string[];
   /** Supports used in pairs (one each side of the joint) with a D1 deck on top. */
   pairedSupport?: boolean;
+  /** Supports that can be stacked on each other to reach higher levels. */
+  stackable?: boolean;
 }
 
 export interface PortDef {
@@ -208,6 +210,7 @@ export function builtinSpecs(p: GeometryParams): PieceSpec[] {
     color,
     supportLevel: level,
     pairedSupport,
+    stackable: pairedSupport,
   });
 
   return [
@@ -319,7 +322,7 @@ export function builtinSpecs(p: GeometryParams): PieceSpec[] {
       },
     },
     // Supports (not placed directly; counted against raised joints)
-    support('RR1', 'Riser pier', 1, 'Pier that holds a joint one level up on its own. Piers stack: two make level 2.', '#9a3412'),
+    support('RR1', 'Riser pier', 1, 'Rock-style pier that holds a joint one level up on its own. Does not stack.', '#9a3412'),
     support(
       'RS1',
       'Support, short',

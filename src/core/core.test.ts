@@ -216,9 +216,9 @@ describe('elevation', () => {
     const { pieces } = placeChain(cat, startPose(), [step('AR'), S, step('AL'), S, step('AR'), S]);
     const v = validateLayout(cat, pieces, { owned: { AR: 2, AL: 1, S1: 3, RR1: 2, RS2: 2, RS3: 2, D1: 2 } });
     expect(v.supports.needed).toEqual({ 1: 2, 2: 2, 3: 2 });
-    // level 3: one RS3 pair. Level 2: two stacked RR1 piers, then an RS2 pair. Nothing left for the rest.
+    // level 3: one RS3 pair; level 2: one RS2 pair; level 1: the two RR1 piers. Decks run out for the rest.
     expect(v.supports.used).toEqual({ RS3: 2, RS2: 2, RR1: 2, D1: 2 });
-    expect(v.supports.unsupported).toEqual({ 3: 1, 1: 2 });
+    expect(v.supports.unsupported).toEqual({ 3: 1, 2: 1 });
   });
 
   it('supports stack to reach higher joints', () => {
@@ -230,8 +230,9 @@ describe('elevation', () => {
     expect(plan(2, { S1: 1, RS1: 8, D1: 2 }).used).toEqual({ RS1: 8, D1: 2 });
     // RS2 + RS1 reach level 3
     expect(plan(3, { S1: 1, RS2: 4, RS1: 4, D1: 2 }).used).toEqual({ RS2: 4, RS1: 4, D1: 2 });
-    // RR1 piers stack on their own, no deck needed
-    expect(plan(2, { S1: 1, RR1: 4 }).used).toEqual({ RR1: 4 });
+    // RR1 rock piers hold level 1 on their own but don't stack
+    expect(plan(1, { S1: 1, RR1: 2 }).used).toEqual({ RR1: 2 });
+    expect(plan(2, { S1: 1, RR1: 4 }).unsupported).toEqual({ 2: 2 });
     // not tall enough
     expect(plan(4, { S1: 1, RS3: 4, D1: 2 }).unsupported).toEqual({ 4: 2 });
   });

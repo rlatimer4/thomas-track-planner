@@ -94,7 +94,8 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
   if (!owned) return { needed, used, unsupported };
 
   // Supports stack: a column of support pieces whose levels add up to the joint's level.
-  // Paired supports (RS1/RS2/RS3) need two columns plus a D1 deck; single ones (piers) need one column.
+  // Paired supports (RS1/RS2/RS3) stack, and need two columns plus a D1 deck. Piers (RR1) stand alone
+  // at their own height and don't stack.
   const supportTypes = cat.supports().filter((t) => (t.supportLevel ?? 0) > 0);
   const paired = supportTypes.filter((t) => t.pairedSupport).sort((x, y) => y.supportLevel! - x.supportLevel!);
   const single = supportTypes.filter((t) => !t.pairedSupport).sort((x, y) => y.supportLevel! - x.supportLevel!);
@@ -115,7 +116,11 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
       if (i >= types.length) return;
       const t = types[i];
       const h = t.supportLevel!;
-      const maxUse = Math.min(Math.floor(left / h), (pool[t.code] ?? 0) - (pick[t.code] ?? 0));
+      const maxUse = Math.min(
+        Math.floor(left / h),
+        (pool[t.code] ?? 0) - (pick[t.code] ?? 0),
+        t.stackable ? Infinity : n === 0 && h === left ? 1 : 0,
+      );
       for (let k = maxUse; k >= 0; k--) {
         if (k) pick[t.code] = (pick[t.code] ?? 0) + k;
         rec(i + 1, left - k * h, n + k);

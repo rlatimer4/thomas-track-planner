@@ -50,7 +50,7 @@ Height is counted in **levels**. Ground is level 0, and each support height is o
 | `AL` | Climbing curve: same shape as a `C` curve, rises one level and turns **left** on the way up (so **right** on the way down) |
 | `AR` | Mirror image of `AL`: turns **right** going up, **left** going down |
 | `AR1` | Like `AR`, but its rock base also holds up the joint at the top, so no support is needed there. It doesn't fit against the bucket lid |
-| `RR1` | Riser pier for level 1. Stands on its own; piers stack (two = level 2) |
+| `RR1` | Rock-style pier for level 1. Stands on its own; does not stack |
 | `RS1`, `RS2`, `RS3` | Supports for levels 1, 2 and 3. Used in pairs (one column each side) with a `D1` deck under the joint. They stack: two `RS1` equal one `RS2`, and `RS2` + `RS1` reach level 3 |
 | `XB` | Bucket lid: a 3-way fork (left, straight, right) standing one level up on its own legs. Ramp up to it |
 | `BKT` | Track bucket: a 4-way crossing on top at level 4, with a ground-level tunnel through it |
@@ -61,7 +61,7 @@ How it's checked:
 - Track may cross over other track that's at least one level lower (configurable). The bucket is solid, so track can't pass
   through its sides at any height below its top.
 - Every raised joint needs supports stacked to its height unless a self-supporting piece (`AR1`'s top, the bridge, the lid,
-  the bucket) holds it. For each joint the planner picks the combination using the fewest pieces you own: a stack of piers,
+  the bucket) holds it. For each joint the planner picks the combination using the fewest pieces you own: an `RR1` pier (level 1 only),
   or two stacked columns of `RS` supports plus a `D1` deck. The **Parts** panel shows supports needed per level and which of yours are used.
 - The bucket and the lid always sit on the floor. A piece that would go below ground is an error.
 - The auto designer climbs and descends on climbing curves in balanced pairs, up to level 3, and never puts a switch right next
