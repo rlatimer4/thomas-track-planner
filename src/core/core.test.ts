@@ -468,6 +468,10 @@ describe('earlier track generations', () => {
     for (const code of ['CS', 'CL', 'C1', 'LC-09']) closes(code, 8);
   });
 
+  it('the 2009 half curve C2 is half a C1: 16 make a circle', () => {
+    closes('C2', 16);
+  });
+
   it('CL runs outside CS, and each switch branches on its own curve', () => {
     expect(cat.get('CL').ports.find((p) => p.id === 'b')!.y).toBeGreaterThan(cat.get('CS').ports.find((p) => p.id === 'b')!.y);
     const branch = (sw: string) => cat.get(sw).ports.find((p) => p.id === 'c')!;

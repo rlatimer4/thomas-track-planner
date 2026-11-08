@@ -359,6 +359,7 @@ function GEN2014_PIECES(): PieceSpec[] {
     short('TU2', 'Half straight (tabs)', 0.5, 'Half straight with side tabs.', DARK),
     short('WS2', 'Half straight (feature)', 0.5, 'Half straight in a play-feature style (W series).', '#a8a29e'),
     short('HT', 'Track adaptor', 0.25, 'Short adaptor that joins 2014+ track to the original (2009–2013) TrackMaster track.', '#64748b'),
+    short('TA', 'Track adaptor', 0.25, 'Short adaptor that joins 2014+ track to the original (2009–2013) TrackMaster track.', '#64748b'),
 
     // 45° curves
     arc('CS', 'Curve, 45°', A45, RS, '45° curve: 8 make a circle.'),
@@ -452,7 +453,28 @@ function GEN2009_PIECES(): PieceSpec[] {
     wye('Y2', 'Y switch (2009)', A45, RS, `Y points: two 45° curves, one left and one right. ${old}`, TAN),
     crossing('W4', 'Crossing (2009)', 0.5, `90° crossing. ${old}`, TAN),
     climb('AL-09', 'Ascending curve, left (2009)', -A45, RL, `Climbs one level while turning left. ${old}`, TAN),
-    climb('AR-09', 'Ascending curve, right (2009)', A45, RL, `Climbs one level while turning right. ${old}`, TAN),
+    climb('AR-09', 'Ascending curve, right (2009)', A45, RL, `Climbs one level while turning right. Printed D2 on some sets. ${old}`, TAN),
+    {
+      code: 'RMP-09',
+      name: 'Sloped straight (2009)',
+      category: 'ramp',
+      description: `Straight that climbs one level. ${old}`,
+      color: TAN,
+      paths: [{ from: 'a', to: 'b', rise: 1 }],
+      ...approx,
+    },
+    arc('C2', 'Half curve (2009)', A45 / 2, RS, `Half of a C1 curve (22.5°). ${old}`, TAN),
+    arc('CSTOP-09', 'Curve with stop (2009)', A45, RS, `C1-shaped curve with a stop/go lever. ${old}`, TAN, { stop: true }),
+    {
+      code: 'DB-09',
+      name: 'Drawbridge (2009)',
+      category: 'bridge',
+      description: `Raise-and-lower drawbridge with its two ramps and a stop/go lever, about two straights long. ${old}`,
+      color: '#57534e',
+      stop: true,
+      paths: [{ from: 'a', to: 'b', length: 2 }],
+      ...approx,
+    },
     {
       code: 'E2-09',
       name: 'Buffer stop (2009)',
@@ -465,6 +487,7 @@ function GEN2009_PIECES(): PieceSpec[] {
     support('R1-09', 'Short riser (2009)', 1, `Riser that holds a joint one level up. ${old}`, '#a16207', approx),
     support('R2-09', 'Tall riser (2009)', 2, `Riser that holds a joint two levels up. ${old}`, '#a16207', approx),
     support('R3-09', 'Riser, level 3 (2009)', 3, `Riser that holds a joint three levels up. ${old}`, '#a16207', approx),
+    support('R4-09', 'Riser, level 4 (2009)', 4, `Riser that holds a joint four levels up. ${old}`, '#a16207', approx),
   ];
 }
 

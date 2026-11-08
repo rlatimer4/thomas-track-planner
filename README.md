@@ -101,14 +101,14 @@ Contents are taken from each set's printed instructions ("What's Included"):
 Pieces whose shape couldn't be confirmed from the instructions (for example the `PR`/`PL` offset, the station and the junction
 base) are marked **estimated** in the catalog. Measure yours and calibrate in Settings, or add a custom piece.
 
-Another 69 sets are included from their instruction sheets, by model number (full contents in `src/core/kits.ts`). Where a sheet
+Another 86 sets are included from their instruction sheets, by model number (full contents in `src/core/kits.ts`). Where a sheet
 has no "What's Included" list, the kit is counted from the labelled pieces in its track layout, and the kit's source says so.
 
 | Track | Sets |
 | --- | --- |
 | **2018+** (60° `C` curves) | FXX64, FXX65, FXX66, FXX69, GFJ76, GGL75, GDV43/GLK09, GHK83, GLL14, GPD84, GPD88 |
-| **2014–2019** (45° `CS`/`CL` curves) | BDP11, BDP14/CJM95, BDP15, BHY49, BHY57, BHY58, CCF24, CCP27, CCP30, CDB57, CDB59, CDB60, CDB61, CDB66, CDB68, CHD21, CHX94/DPM62, CHY03, CHY06, DFM51, DFM53, DFM54, DFM61, DFN23, DFN29, DVF71, DVF73, DVF75, FBK07, FBK08, FBK47, FBK48, FBK52, FGR22/FPM59, FJK24, FJK25, FJK49, FJK50, FJL38, FJL40, FJL41, FJL44, GBN45, GPB49 |
-| **2009–2013** original TrackMaster (45° `C1` curves) | BBP07, BDP10, R9485, R9488, R9490, R9491, R9629, T0210, T0211, T0212, T0787, Y2024, Y8756, Y8757 |
+| **2014–2019** (45° `CS`/`CL` curves) | BDP11, BDP14/CJM95, BDP15, BHY49, BHY57, BHY58, CCF24, CCP27, CCP30, CDB57, CDB59, CDB60, CDB61, CDB66, CDB68, CHD21, CHX94/DPM62, CHY03, CHY06, DFM51, DFM53, DFM54, DFM61, DFN23, DFN29, DVF71, DVF73, DVF75, FBK07, FBK08, FBK47, FBK48, FBK52, FGR22/FPM59, FJK24, FJK25, FJK49, FJK50, FJL38, FJL40, FJL41, FJL44, GBN45, GPB49, BDP32, CCP26, CCP29 |
+| **2009–2013** original TrackMaster (45° `C1` curves) | BBP07, BDP10, R9485, R9488, R9490, R9491, R9629, T0210, T0211, T0212, T0787, Y2024, Y8756, Y8757, R9633, V1578, V1579, V6453, V6753, V7624, V7625, V8902, V8903, V8904, W3078, W3542, X0464, X5346/Y1700 |
 
 ### Earlier track generations
 
