@@ -75,7 +75,7 @@ Height is counted in **levels**. Ground is level 0, and each support height is o
 | `RR1` | Rock-style pier for level 1. Stands on its own; does not stack |
 | `RS1`, `RS2`, `RS3` | Supports for levels 1, 2 and 3. Used in pairs (one column each side) with a `D1` deck under the joint. They stack: two `RS1` equal one `RS2`, and `RS2` + `RS1` reach level 3 |
 | `XB` | Bucket lid: a 3-way fork (left, straight, right) standing one level up on its own legs. Ramp up to it |
-| `BKT` | Track bucket: a 4-way crossing on top at level 4, with a ground-level tunnel through it |
+| `BKT` | Track bucket, turned over: two tracks cross corner to corner on its bottom at level 4, 120° apart, and a ground-level tunnel runs underneath along the line bisecting that 120° angle |
 | `VB` | Vicarstown lift bridge: carries a straight at level 2, holding both of its ends, so track can pass underneath |
 
 How it's checked:
@@ -96,7 +96,7 @@ Contents are taken from each set's printed instructions ("What's Included"):
 | Kit | Track pieces |
 | --- | --- |
 | **GLK80** Talking Thomas & Percy Train Set | C ×6, CU4, CS2, TL, TR ×2, PR, PL, S1 ×2, TU4, AL ×4, BS1, Brendam Docks curve, loading station, Vicarstown bridge, supports RR1 ×2, RS2 ×4, D1 ×2 |
-| **HNP81** Connect & Build Track Bucket | CHT, AL ×3, ES3 ×5, AR1, AR, C ×3, TR ×2, TL, BT1, S1 ×4, RRT, junction base, bucket lid (3-way fork), bucket (crossing + tunnel), BS2, supports RS1 ×4, RS2 ×6, RS3 ×4, D1 ×7 |
+| **HNP81** Connect & Build Track Bucket | CHT, AL ×3, ES3 ×5, AR1, AR, C ×3, TR ×2, TL, BT1, S1 ×4, RRT, junction base, bucket lid (3-way fork), bucket (120° crossing + tunnel), BS2, supports RS1 ×4, RS2 ×6, RS3 ×4, D1 ×7 |
 
 Pieces whose shape couldn't be confirmed from the instructions (for example the `PR`/`PL` offset, the station and the junction
 base) are marked **estimated** in the catalog. Measure yours and calibrate in Settings, or add a custom piece.
