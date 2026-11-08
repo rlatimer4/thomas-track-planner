@@ -111,12 +111,106 @@ describe('validation', () => {
   });
 
   it('a ramp up and down needs supports at the top', () => {
-    const pieces = placeChain(cat, startPose(), [step('AL'), S, step('AL', 'rev')]).pieces;
-    const v = validateLayout(cat, pieces, { owned: { AL: 2, S1: 1 } });
+    // AL climbs turning left; AR going down (entered high) turns left too
+    const pieces = placeChain(cat, startPose(), [step('AL'), S, step('AR', 'rev')]).pieces;
+    const v = validateLayout(cat, pieces, { owned: { AL: 1, AR: 1, S1: 1 } });
     expect(v.supports.needed[1]).toBe(2);
     expect(v.issues.some((i) => i.rule === 'supports')).toBe(true);
-    const ok = validateLayout(cat, pieces, { owned: { AL: 2, S1: 1, RR1: 2 } });
+    const ok = validateLayout(cat, pieces, { owned: { AL: 1, AR: 1, S1: 1, RR1: 2 } });
     expect(ok.issues.some((i) => i.rule === 'supports')).toBe(false);
+  });
+});
+
+describe('elevation', () => {
+  const levelOf = (p: { uid: string }, all: ReturnType<typeof placeChain>['pieces'], port: string) =>
+    worldPorts(cat, all.find((x) => x.uid === p.uid)!).find((q) => q.port === port)!.z;
+
+  it('AL turns left and AR turns right while climbing, by one curve each', () => {
+    const al = placeChain(cat, startPose(), [step('AL')]);
+    const ar = placeChain(cat, startPose(), [step('AR')]);
+    expect(Math.round(angleDiff(al.end.dir, 0))).toBe(-45);
+    expect(Math.round(angleDiff(ar.end.dir, 0))).toBe(45);
+    expect(al.end.z).toBe(1);
+    expect(ar.end.z).toBe(1);
+    // same plan shape as a C curve
+    const c = placeChain(cat, startPose(), [R]);
+    expect(ar.end.x).toBeCloseTo(c.end.x);
+    expect(ar.end.y).toBeCloseTo(c.end.y);
+  });
+
+  it('going down a ramp turns the other way', () => {
+    const down = placeChain(cat, startPose(0, 0, 0, 1), [step('AL', 'rev')]);
+    expect(Math.round(angleDiff(down.end.dir, 0))).toBe(45);
+    expect(down.end.z).toBe(0);
+  });
+
+  it('three ramps climb to support level 3', () => {
+    const { pieces, end } = placeChain(cat, startPose(), [step('AR'), S, step('AL'), S, step('AR')]);
+    expect(end.z).toBe(3);
+    expect(levelOf(pieces[1], pieces, 'a')).toBe(1);
+  });
+
+  it("AR1's rock base supports its own top joint", () => {
+    const withAr = placeChain(cat, startPose(), [step('AR'), S]).pieces;
+    const withAr1 = placeChain(cat, startPose(), [step('AR1'), S]).pieces;
+    expect(validateLayout(cat, withAr).supports.needed[1]).toBe(2);
+    expect(validateLayout(cat, withAr1).supports.needed[1]).toBe(1);
+  });
+
+  it('AR1 cannot join the bucket lid', () => {
+    const { pieces } = placeChain(cat, startPose(), [step('AR1'), { code: 'XB', inPort: 'a', outPort: 'b' }]);
+    const v = validateLayout(cat, pieces);
+    expect(v.issues.some((i) => i.rule === 'bad-joint')).toBe(true);
+    const ok = validateLayout(cat, placeChain(cat, startPose(), [step('AR'), { code: 'XB', inPort: 'a', outPort: 'b' }]).pieces);
+    expect(ok.issues.some((i) => i.rule === 'bad-joint')).toBe(false);
+  });
+
+  it('the lid alone is a crossing one level up; on the bucket it is four levels up', () => {
+    const lid = placeAt(cat, startPose(0, 0, 0, 1), 'XB', 'a').ports;
+    expect(lid.every((p) => p.z === 1)).toBe(true);
+    // joined straight from the floor it stays on the floor, and the joint is flagged
+    const fromFloor = placeChain(cat, startPose(), [S, { code: 'XB', inPort: 'a', outPort: 'b' }]).pieces;
+    expect(fromFloor[1].z).toBe(0);
+    expect(validateLayout(cat, fromFloor).issues.some((i) => i.rule === 'level-step')).toBe(true);
+    // ramp up to it and it fits
+    const ramped = placeChain(cat, startPose(), [step('AR'), { code: 'XB', inPort: 'a', outPort: 'b' }]).pieces;
+    expect(validateLayout(cat, ramped).issues.filter((i) => i.severity === 'error')).toEqual([]);
+    const bucket = placeAt(cat, startPose(), 'XB4', 'e').ports;
+    expect(bucket.find((p) => p.port === 'a')!.z).toBe(4);
+    expect(bucket.find((p) => p.port === 'f')!.z).toBe(0);
+  });
+
+  it('both ways of using the lid count against the same piece', () => {
+    const a = placeAt(cat, startPose(), 'XB', 'a').piece;
+    const b = placeAt(cat, startPose(2000, 0), 'XB4', 'e').piece;
+    const v = validateLayout(cat, [a, b], { owned: { XB: 1 } });
+    expect(v.counts.XB).toBe(2);
+    expect(v.issues.some((i) => i.rule === 'shortage')).toBe(true);
+  });
+
+  it('ground track can pass through the bucket tunnel but not through its sides', () => {
+    const bucket = placeAt(cat, startPose(), 'XB4', 'e').piece;
+    const S1 = cat.params.straight;
+    // track joined to both tunnel mouths runs through underneath
+    const before = placeChain(cat, startPose(-S1, 0, 0), [S]).pieces;
+    const after = placeChain(cat, startPose(S1, 0, 0), [S]).pieces;
+    const v = validateLayout(cat, [bucket, ...before, ...after]);
+    expect(v.issues.some((i) => i.rule === 'overlap')).toBe(false);
+    expect(v.conn.links.size).toBe(4);
+    // straight running across the bucket sideways at ground level
+    const across = placeChain(cat, startPose(S1 / 2 + 30, -S1, 90), [S, S]).pieces;
+    expect(validateLayout(cat, [bucket, ...across]).issues.some((i) => i.rule === 'overlap')).toBe(true);
+    // the same at level 4 (on top) is fine only if it lines up with the lid; at level 2 it hits the bucket
+    const mid = placeChain(cat, startPose(S1 / 2 + 30, -S1, 90, 2), [S, S]).pieces;
+    expect(validateLayout(cat, [bucket, ...mid]).issues.some((i) => i.rule === 'overlap')).toBe(true);
+  });
+
+  it('supports of each height are matched to raised joints', () => {
+    const { pieces } = placeChain(cat, startPose(), [step('AR'), S, step('AL'), S, step('AR'), S]);
+    const v = validateLayout(cat, pieces, { owned: { AR: 2, AL: 1, S1: 3, RR1: 2, RS2: 2, RS3: 2, D1: 2 } });
+    expect(v.supports.needed).toEqual({ 1: 2, 2: 2, 3: 2 });
+    // level 3 needs RS3 pairs: only one pair owned, so one joint is unsupported
+    expect(v.supports.unsupported).toEqual({ 2: 1, 3: 1 });
   });
 });
 

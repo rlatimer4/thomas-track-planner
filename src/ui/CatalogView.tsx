@@ -61,14 +61,20 @@ export function CatalogView() {
                       <>
                         {t.ports.length} end{t.ports.length > 1 ? 's' : ''}
                         {t.length ? ` · ${fmtLen(t.length, units)} long` : ''}
-                        {t.ports.some((p) => p.z !== t.ports[0].z) && ` · climbs ${Math.max(...t.ports.map((p) => p.z)) - Math.min(...t.ports.map((p) => p.z))} level`}
+                        {t.category === 'ramp' &&
+                          ` · climbs ${Math.max(...t.ports.map((p) => p.z)) - Math.min(...t.ports.map((p) => p.z))} level`}
+                        {t.category !== 'ramp' &&
+                          Math.max(...t.ports.map((p) => p.z)) > 0 &&
+                          ` · top at level ${Math.max(...t.ports.map((p) => p.z))}`}
+                        {t.supportedPorts?.length ? ' · supports its own top joint' : ''}
                       </>
                     ) : t.category === 'support' && t.supportLevel ? (
                       <>Holds track at level {t.supportLevel}</>
                     ) : (
                       <>Support part</>
                     )}
-                    {' · '}you own {owned[t.code] ?? 0}
+                    {' · '}you own {owned[t.stockCode] ?? 0}
+                    {t.stockCode !== t.code && ` (same piece as ${t.stockCode})`}
                   </div>
                   {t.custom && (
                     <button className="link danger" onClick={() => removeCustom(t.code)}>
@@ -91,7 +97,16 @@ function PieceEditor({ onDone }: { onDone: () => void }) {
   const p = cat.params;
   const toUnit = (mm: number) => +(units === 'cm' ? mm / 10 : mm / 25.4).toFixed(1);
   const fromUnit = (v: number) => (units === 'cm' ? v * 10 : v * 25.4);
-  const [d, setD] = useState<CustomPieceDef>({ code: '', name: '', kind: 'straight', length: p.straight, radius: p.curveRadius, angle: p.curveAngle, hand: 'right', levels: 1 });
+  const [d, setD] = useState<CustomPieceDef>({
+    code: '',
+    name: '',
+    kind: 'straight',
+    length: p.straight,
+    radius: p.curveRadius,
+    angle: p.curveAngle,
+    hand: 'right',
+    levels: 1,
+  });
   const save = () => {
     const code = d.code.trim().toUpperCase();
     if (!code || !d.name.trim()) return alert('Code and name are required.');
@@ -121,13 +136,15 @@ function PieceEditor({ onDone }: { onDone: () => void }) {
       </label>
       {['straight', 'ramp', 'switch'].includes(d.kind) && (
         <label>
-          Length ({units}) <input type="number" step="0.1" value={toUnit(d.length!)} onChange={(e) => setD({ ...d, length: fromUnit(+e.target.value) })} />
+          Length ({units}){' '}
+          <input type="number" step="0.1" value={toUnit(d.length!)} onChange={(e) => setD({ ...d, length: fromUnit(+e.target.value) })} />
         </label>
       )}
       {['curve', 'switch'].includes(d.kind) && (
         <>
           <label>
-            Radius ({units}) <input type="number" step="0.1" value={toUnit(d.radius!)} onChange={(e) => setD({ ...d, radius: fromUnit(+e.target.value) })} />
+            Radius ({units}){' '}
+            <input type="number" step="0.1" value={toUnit(d.radius!)} onChange={(e) => setD({ ...d, radius: fromUnit(+e.target.value) })} />
           </label>
           <label>
             Angle (°) <input type="number" value={d.angle} onChange={(e) => setD({ ...d, angle: +e.target.value })} />

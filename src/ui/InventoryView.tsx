@@ -14,7 +14,8 @@ export function InventoryView() {
     update((s) => ({ ...s, customKits: s.customKits.filter((k) => k.id !== id), inventory: setKitQty(s.inventory, id, 0) }));
   };
 
-  const all = cat.all();
+  // alternate ways of using one physical piece (e.g. the lid on the bucket) aren't stocked separately
+  const all = cat.all().filter((t) => t.stockCode === t.code);
   const trackTotal = all.filter((t) => t.isTrack).reduce((a, t) => a + (owned[t.code] ?? 0), 0);
   const supportTotal = all.filter((t) => !t.isTrack).reduce((a, t) => a + (owned[t.code] ?? 0), 0);
 
@@ -56,7 +57,11 @@ export function InventoryView() {
             );
           })}
         </div>
-        {showAddKit ? <KitEditor onDone={() => setShowAddKit(false)} /> : <button onClick={() => setShowAddKit(true)}>+ Define a kit</button>}
+        {showAddKit ? (
+          <KitEditor onDone={() => setShowAddKit(false)} />
+        ) : (
+          <button onClick={() => setShowAddKit(true)}>+ Define a kit</button>
+        )}
       </section>
 
       <section>
@@ -107,7 +112,17 @@ export function InventoryView() {
   );
 }
 
-export function Stepper({ value, onChange, min = 0, label }: { value: number; onChange: (v: number) => void; min?: number; label: string }) {
+export function Stepper({
+  value,
+  onChange,
+  min = 0,
+  label,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  min?: number;
+  label: string;
+}) {
   return (
     <span className="stepper" role="group" aria-label={label}>
       <button onClick={() => onChange(Math.max(min, value - 1))} aria-label="decrease" disabled={value <= min}>
@@ -145,14 +160,17 @@ function KitEditor({ onDone }: { onDone: () => void }) {
         Model number <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="optional, e.g. ABC12" />
       </label>
       <div className="kit-pieces">
-        {cat.all().map((t) => (
-          <div key={t.code} className="kp">
-            <span>
-              <strong>{t.code}</strong> {t.name}
-            </span>
-            <Stepper value={pieces[t.code] ?? 0} onChange={(v) => setPieces({ ...pieces, [t.code]: v })} label={t.code} />
-          </div>
-        ))}
+        {cat
+          .all()
+          .filter((t) => t.stockCode === t.code)
+          .map((t) => (
+            <div key={t.code} className="kp">
+              <span>
+                <strong>{t.code}</strong> {t.name}
+              </span>
+              <Stepper value={pieces[t.code] ?? 0} onChange={(v) => setPieces({ ...pieces, [t.code]: v })} label={t.code} />
+            </div>
+          ))}
       </div>
       <div className="row">
         <button className="primary" onClick={save}>

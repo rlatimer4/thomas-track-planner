@@ -1,7 +1,7 @@
 import { angleDiff, dist, type Vec } from './geometry';
 import type { Catalog } from './catalog';
 import { shortages, type Counts } from './inventory';
-import { computeConnectivity, pieceCounts, portKey, worldSamples, type Connectivity, type PlacedPiece } from './layout';
+import { computeConnectivity, pieceCounts, portKey, worldBlockers, worldSamples, type Connectivity, type PlacedPiece } from './layout';
 import { analyzeRunning, turnThrough, type RunAnalysis } from './graph';
 
 export type Severity = 'error' | 'warning' | 'info';
@@ -39,10 +39,19 @@ export const RULES: Record<string, { title: string; why: string }> = {
   'no-loop': { title: 'No continuous loop', why: 'Motorized engines run best on a closed loop so they never stop at an end.' },
   shortage: { title: 'Not enough pieces', why: 'The layout uses more of a piece than your inventory has.' },
   supports: { title: 'Supports needed', why: 'Raised joints need supports; some cannot be covered by supports you own.' },
+  'below-ground': { title: 'Below ground', why: 'Part of this piece would be under the floor.' },
+  'off-ground': {
+    title: 'Not on the floor',
+    why: 'This piece stands on its own base (the bucket or the lid’s legs) so it must sit on the floor. Use ramps to reach its height.',
+  },
+  'bad-joint': { title: 'Pieces don’t fit together', why: 'These two pieces physically clash where they meet.' },
   'reverse-curve': { title: 'S-bend', why: 'Opposite curves back to back jerk trains sideways; a straight between them runs smoother.' },
   'switch-on-grade': { title: 'Switch next to a ramp', why: 'Points on or right at a grade are a common stall/derail spot.' },
   'steep-climb': { title: 'Long climb', why: 'Two ramps in a row climb steeply; small battery engines may stall.' },
-  'reversing-loop': { title: 'Reversing loop', why: 'A train can come back along the same track facing the other way. Fine for battery engines, but watch for head-on meets.' },
+  'reversing-loop': {
+    title: 'Reversing loop',
+    why: 'A train can come back along the same track facing the other way. Fine for battery engines, but watch for head-on meets.',
+  },
   'trapped-section': { title: 'Dead-end section', why: 'From here a train can only reach a buffer or end and must stop.' },
 };
 
@@ -67,7 +76,12 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
     if (mate) seen.add(portKey(mate));
     const level = Math.round(port.z);
     if (level < 1) continue;
-    const selfSupported = [port.uid, mate?.uid].some((u) => u && cat.get(byUid.get(u)!.code).selfSupporting);
+    const holds = (uid: string | undefined, portId: string | undefined) => {
+      if (!uid || !portId) return false;
+      const t = cat.get(byUid.get(uid)!.code);
+      return !!t.selfSupporting || !!t.supportedPorts?.includes(portId);
+    };
+    const selfSupported = holds(port.uid, port.port) || holds(mate?.uid, mate?.port);
     if (selfSupported) continue;
     needed[level] = (needed[level] ?? 0) + 1;
   }
@@ -84,12 +98,14 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
   };
   const options: Record<number, Counts[]> = {
     1: [{ RR1: 1 }, { RS1: 2, D1: 1 }],
-    2: [{ RS2: 2, D1: 1 }, { RS1: 4, D1: 1 }],
+    2: [
+      { RS2: 2, D1: 1 },
+      { RS1: 4, D1: 1 },
+    ],
     3: [{ RS3: 2, D1: 1 }],
   };
   // custom supports: a single piece holding the exact level
-  for (const s of cat.supports())
-    if (s.custom && s.supportLevel) (options[s.supportLevel] ??= []).unshift({ [s.code]: 1 });
+  for (const s of cat.supports()) if (s.custom && s.supportLevel) (options[s.supportLevel] ??= []).unshift({ [s.code]: 1 });
   const unsupported: Record<number, number> = {};
   for (const level of Object.keys(needed)
     .map(Number)
@@ -141,7 +157,7 @@ export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: Valida
   const cell = params.trackWidth;
   const minGap = params.trackWidth * 0.85;
   const grid = new Map<string, { uid: string; x: number; y: number; z: number }[]>();
-  const all = pieces.map((p) => ({ p, samples: worldSamples(cat, p).flat() }));
+  const all = pieces.map((p) => ({ p, samples: [...worldSamples(cat, p).flat(), ...worldBlockers(cat, p)] }));
   for (const { p, samples } of all)
     for (const s of samples) {
       const k = `${Math.floor(s.x / cell)},${Math.floor(s.y / cell)}`;
@@ -177,22 +193,35 @@ export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: Valida
     }
   }
 
+  // ---- pieces under the floor, and free-standing pieces lifted off it
+  for (const p of pieces) {
+    const t = cat.get(p.code);
+    if (t.body && Math.abs(p.z) > 0.01) {
+      issues.push(issue('off-ground', 'error', `${t.name} is placed ${p.z > 0 ? 'above' : 'below'} the floor.`, [p.uid]));
+      continue;
+    }
+    const low = Math.min(
+      ...worldSamples(cat, p)
+        .flat()
+        .map((s) => s.z),
+    );
+    if (low < -0.01) issues.push(issue('below-ground', 'error', `${t.name} goes below ground.`, [p.uid]));
+  }
+
   // ---- inventory
-  const counts = pieceCounts(pieces);
+  const counts = pieceCounts(pieces, cat);
   if (opts.owned) {
     const short = shortages(counts, opts.owned);
     for (const [code, n] of Object.entries(short)) {
-      const uids = pieces.filter((p) => p.code === code).map((p) => p.uid);
-      issues.push(issue('shortage', 'error', `Uses ${n} more ${cat.get(code).name} (${code}) than you own.`, uids));
+      const uids = pieces.filter((p) => cat.get(p.code).stockCode === code).map((p) => p.uid);
+      issues.push(issue('shortage', 'error', `Uses ${n} more ${cat.has(code) ? cat.get(code).name : code} (${code}) than you own.`, uids));
     }
   }
 
   // ---- supports
   const supports = planSupports(cat, pieces, conn, opts.owned);
   for (const [level, n] of Object.entries(supports.unsupported)) {
-    issues.push(
-      issue('supports', 'warning', `${n} raised joint${n > 1 ? 's' : ''} at level ${level} without a support you own.`, []),
-    );
+    issues.push(issue('supports', 'warning', `${n} raised joint${n > 1 ? 's' : ''} at level ${level} without a support you own.`, []));
   }
 
   // ---- running analysis
@@ -236,12 +265,17 @@ export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: Valida
       if (wp) Object.assign(at, { x: wp.x, y: wp.y });
 
       // reverse curves: travel from p (leaving via port) into q (entering via mate.port)
-      if (t.category === 'curve' && u.category === 'curve') {
+      // pieces that physically can't meet
+      if (t.cannotJoin?.includes(u.stockCode) || u.cannotJoin?.includes(t.stockCode))
+        issues.push(issue('bad-joint', 'error', `${t.code} can't connect directly to ${u.code}.`, [p.uid, q.uid], at));
+
+      const turns = (x: typeof t) => x.ports.length === 2 && (x.category === 'curve' || x.category === 'ramp');
+      if (turns(t) && turns(u)) {
         const pIn = t.ports.find((x) => x.id !== port.id)!.id;
         const qOut = u.ports.find((x) => x.id !== mate.port)!.id;
         const a = turnThrough(cat, p, pIn, port.id);
         const b = turnThrough(cat, q, mate.port, qOut);
-        if (Math.sign(a) !== Math.sign(b) && Math.abs(a) > 1 && Math.abs(b) > 1)
+        if (Math.abs(a) > 1 && Math.abs(b) > 1 && Math.sign(a) !== Math.sign(b))
           issues.push(issue('reverse-curve', 'info', 'Curves turn opposite ways back to back.', [p.uid, q.uid], at));
       }
       const cats = [t.category, u.category];

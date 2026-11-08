@@ -34,15 +34,38 @@ saves a printable drawing.
 
 - **Connectors.** TrackMaster ends are genderless: any end joins any other end at the same height.
 - **Geometry** (Settings → calibration; defaults are estimates, not published figures):
-  standard straight `S1` 21 cm, curve `C` radius 20 cm turning 45° (8 make a circle), ramp `AL` 31.5 cm rising one level.
+  standard straight `S1` 21 cm, curve `C` radius 20 cm turning 45° (8 make a circle).
   Switches' straight legs equal a straight, and their branches equal a curve, so switches can replace straights anywhere.
   `PR`/`PL` offset switches shift the branch sideways by the lane spacing and end parallel, which is how the GLK80 loading station
   is fed.
-- **Elevation** is counted in levels. Track may cross over other track that is at least one level lower (configurable). Raised
-  joints need a support: a riser pier (`RR1`) for level 1, or a pair of supports (`RS1`/`RS2`/`RS3`) with a `D1` deck. Two stacked
-  `RS1`s make a level-2 support. The lift bridge (`VB`) and the bucket lid (`XB`) support themselves.
 - **Joint play.** Real toy track has a little slack. Ends within 12 mm and 4° count as connected (configurable). The auto designer
   only closes loops within 9 mm.
+
+### Elevation
+
+Height is counted in **levels**. Ground is level 0, and each support height is one level.
+
+| Piece | Elevation behaviour |
+| --- | --- |
+| `AL` | Climbing curve: same shape as a `C` curve, rises one level and turns **left** on the way up (so **right** on the way down) |
+| `AR` | Mirror image of `AL`: turns **right** going up, **left** going down |
+| `AR1` | Like `AR`, but its rock base also holds up the joint at the top, so no support is needed there. It doesn't fit against the bucket lid |
+| `RR1`, `RS1` | Support for level 1 (`RS1` is used in pairs with a `D1` deck; two stacked `RS1`s reach level 2) |
+| `RS2` | Support for level 2 (pair + `D1`) |
+| `RS3` | Support for level 3 (pair + `D1`) |
+| `XB` | Bucket lid used on its own: a crossing on its own legs, one level up. Ramp up to it |
+| `XB4` | The lid on top of the bucket: crossing four levels up, with a ground-level tunnel through the bucket. Same physical lid as `XB` |
+| `VB` | Lift bridge: holds itself up when raised |
+
+How it's checked:
+- Joints connect only at the same level; otherwise it's a **height mismatch**.
+- Track may cross over other track that's at least one level lower (configurable). The bucket is solid, so track can't pass
+  through its sides at any height below its top.
+- Every raised joint needs a support of the matching height unless a self-supporting piece (`AR1`'s top, the bridge, the lid)
+  holds it. The **Parts** panel shows supports needed per level and which of yours are used.
+- The bucket and the standalone lid always sit on the floor. A piece that would go below ground is an error.
+- The auto designer climbs and descends on climbing curves in balanced pairs, up to level 3, and never puts a switch right next
+  to one.
 
 ### Kits included
 
@@ -53,8 +76,8 @@ Contents are taken from each set's printed instructions ("What's Included"):
 | **GLK80** Talking Thomas & Percy Train Set | C ×6, CU4, CS2, TL, TR ×2, PR, PL, S1 ×2, TU4, AL ×4, BS1, Brendam Docks curve, loading station, Vicarstown bridge, supports RR1 ×2, RS2 ×4, D1 ×2 |
 | **HNP81** Connect & Build Track Bucket | CHT, AL ×3, ES3 ×5, AR1, AR, C ×3, TR ×2, TL, BT1, S1 ×4, RRT, junction base, bucket crossing lid, BS2, supports RS1 ×4, RS2 ×6, RS3 ×4, D1 ×7 |
 
-Pieces whose shape couldn't be confirmed from the instructions (for example the `PR`/`PL` offset, the station, the junction base
-and the bucket lid) are marked **estimated** in the catalog. Measure yours and calibrate in Settings, or add a custom piece.
+Pieces whose shape couldn't be confirmed from the instructions (for example the `PR`/`PL` offset, the station and the junction
+base) are marked **estimated** in the catalog. Measure yours and calibrate in Settings, or add a custom piece.
 
 ## How auto design works
 
@@ -62,7 +85,8 @@ and the bucket lid) are marked **estimated** in the catalog. Measure yours and c
    multiples of half a straight. So a closed loop is a sequence of left/right curves (a "turn word") plus straight runs at known
    headings. For each turn word, the generator solves for run lengths that cancel the curves' offset (within the joint play) and
    picks from your inventory. Loops turn 360° in total. Figure-8s turn 0° and must cross on a raised section.
-2. **Elevation.** Ramps are placed as a balanced up/down sequence that never goes below ground and at most two levels up.
+2. **Elevation.** Some curves of the loop become climbing curves (`AL`/`AR`/`AR1`), in a balanced up/down sequence that never
+   goes below ground or above level 3. A right-hand bend can climb on an `AR` or descend on an `AL`, and vice versa.
    Raised straights use support-tab pieces (`TU4`, `ES3`, `CU4`) when available, and two raised straights can become the lift
    bridge.
 3. **Decoration.** Straights on the finished loop are swapped for same-length pieces: offset-switch double track, the two-lane

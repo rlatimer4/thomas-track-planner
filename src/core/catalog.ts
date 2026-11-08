@@ -12,7 +12,7 @@ export interface GeometryParams {
   curveRadius: number;
   /** Turn of a standard curve, degrees. 45 means 8 curves make a circle. */
   curveAngle: number;
-  /** Plan length of an ascending ramp (AL/AR), mm. */
+  /** Plan length of custom straight ramps, mm. (Built-in ramps are climbing curves.) */
   rampLength: number;
   /** Lateral distance between parallel tracks on the PR/PL offset switches and station, mm. */
   parallelSpacing: number;
@@ -41,16 +41,7 @@ export const DEFAULT_PARAMS: GeometryParams = {
   angleTolerance: 4,
 };
 
-export type PieceCategory =
-  | 'straight'
-  | 'curve'
-  | 'switch'
-  | 'ramp'
-  | 'buffer'
-  | 'crossing'
-  | 'station'
-  | 'bridge'
-  | 'support';
+export type PieceCategory = 'straight' | 'curve' | 'switch' | 'ramp' | 'buffer' | 'crossing' | 'station' | 'bridge' | 'support';
 
 export interface PathSpec {
   from: string;
@@ -78,6 +69,17 @@ export interface PieceSpec {
   approximate?: boolean;
   /** Set on pieces the user defined. */
   custom?: boolean;
+  /**
+   * Inventory code when this is another way of using a physical piece (e.g. the bucket lid
+   * on its own vs. on top of the bucket). Defaults to `code`.
+   */
+  stock?: string;
+  /** Solid body (local rect) that other track can't pass through, between levels zMin and zMax. */
+  body?: { x: number; y: number; w: number; h: number; zMin: number; zMax: number; tunnelAlongX?: boolean };
+  /** Ports whose joint is held up by this piece itself (e.g. AR1's rock base), so no support is needed there. */
+  supportedPorts?: string[];
+  /** Inventory codes this piece can't be joined to directly. */
+  cannotJoin?: string[];
 }
 
 export interface PortDef {
@@ -93,6 +95,10 @@ export interface PieceType extends PieceSpec {
   ports: PortDef[];
   /** Centre-line samples per path, in the piece's local frame. */
   samples: Sample[][];
+  /** Points filling the piece's solid body, used only for overlap checks. */
+  blockers: Sample[];
+  /** Inventory code this piece is counted against. */
+  stockCode: string;
   /** Route table: for each port, the ports a train can leave through after entering it. */
   routes: Record<string, string[]>;
   isTrack: boolean;
@@ -135,7 +141,14 @@ export function builtinSpecs(p: GeometryParams): PieceSpec[] {
     paths: [{ from: 'a', to: 'b', ops: [arc(R, A)] }],
     ...extra,
   });
-  const sw = (code: string, name: string, turn: number, description: string, color = '#59616b', extra: Partial<PieceSpec> = {}): PieceSpec => ({
+  const sw = (
+    code: string,
+    name: string,
+    turn: number,
+    description: string,
+    color = '#59616b',
+    extra: Partial<PieceSpec> = {},
+  ): PieceSpec => ({
     code,
     name,
     category: 'switch',
@@ -159,13 +172,23 @@ export function builtinSpecs(p: GeometryParams): PieceSpec[] {
       { from: 'a', to: 'c', ops: sCurve(S, side * p.parallelSpacing) },
     ],
   });
-  const ramp = (code: string, name: string, description: string, color: string): PieceSpec => ({
+  // Climbing curves: same plan shape as a C curve, rising one level from end a to end b.
+  // `turn` is the direction they turn while climbing (going down they turn the other way).
+  const ramp = (
+    code: string,
+    name: string,
+    turn: number,
+    description: string,
+    color: string,
+    extra: Partial<PieceSpec> = {},
+  ): PieceSpec => ({
     code,
     name,
     category: 'ramp',
     description,
     color,
-    paths: [{ from: 'a', to: 'b', ops: [line(p.rampLength)], zFrom: 0, zTo: 1 }],
+    paths: [{ from: 'a', to: 'b', ops: [arc(R, turn)], zFrom: 0, zTo: 1 }],
+    ...extra,
   });
   const buffer = (code: string, name: string, color: string): PieceSpec => ({
     code,
@@ -200,15 +223,32 @@ export function builtinSpecs(p: GeometryParams): PieceSpec[] {
     // Switches
     sw('TL', 'Switch, left', -A, 'Points: straight through, or branch curving left.'),
     sw('TR', 'Switch, right', A, 'Points: straight through, or branch curving right.'),
-    offsetSw('PL', 'Offset switch, left', -1, 'Points whose branch shifts left and runs parallel. Pairs with PR around the loading station.'),
-    offsetSw('PR', 'Offset switch, right', 1, 'Points whose branch shifts right and runs parallel. Pairs with PL around the loading station.'),
+    offsetSw(
+      'PL',
+      'Offset switch, left',
+      -1,
+      'Points whose branch shifts left and runs parallel. Pairs with PR around the loading station.',
+    ),
+    offsetSw(
+      'PR',
+      'Offset switch, right',
+      1,
+      'Points whose branch shifts right and runs parallel. Pairs with PL around the loading station.',
+    ),
     sw('SWB', 'Junction base (switch)', A, 'Blue junction base with a switch lever (HNP81). Modelled as a right-hand switch.', '#2563eb', {
       approximate: true,
     }),
     // Ramps
-    ramp('AL', 'Ascending ramp', 'Climbs (or descends) one level over its length.', '#4b5563'),
-    ramp('AR', 'Ascending ramp (R)', 'Climbs one level over its length.', '#334155'),
-    ramp('AR1', 'Ascending ramp (rock base)', 'Climbs one level; has a rock-style base.', '#334155'),
+    ramp('AL', 'Climbing curve, left', -A, 'Curve that climbs one level, turning left on the way up (right on the way down).', '#4b5563'),
+    ramp('AR', 'Climbing curve, right', A, 'Curve that climbs one level, turning right on the way up (left on the way down).', '#334155'),
+    ramp(
+      'AR1',
+      'Climbing curve, right (rock base)',
+      A,
+      'Like AR, but its rock base also holds up the joint at the top, so no support is needed there. Does not fit against the bucket lid.',
+      '#57534e',
+      { supportedPorts: ['b'], cannotJoin: ['XB'] },
+    ),
     // Buffers
     buffer('BS1', 'Buffer stop', '#dc2626'),
     buffer('BS2', 'Buffer stop (wood)', '#a8a29e'),
@@ -237,18 +277,49 @@ export function builtinSpecs(p: GeometryParams): PieceSpec[] {
     },
     {
       code: 'XB',
-      name: 'Bucket crossing (lid on tunnel)',
+      name: 'Bucket lid crossing',
       category: 'crossing',
-      description:
-        'The track-bucket lid: a raised 90° crossing (3 levels up) sitting on the bucket, with a tunnel underneath for ground-level track.',
+      description: 'The bucket lid used on its own: a 90° crossing raised one level on its own legs. Ramp up to it from each side.',
       color: '#9ca3af',
       selfSupporting: true,
       approximate: true,
       paths: [
-        { from: 'a', to: 'b', ops: [line(S)] },
-        { from: 'c', to: 'd', start: { x: S / 2, y: -S / 2, dir: 90 }, ops: [line(S)] },
-        { from: 'e', to: 'f', start: { x: 0, y: 0, dir: 0 }, ops: [line(S)], zFrom: -3, zTo: -3 },
+        { from: 'a', to: 'b', ops: [line(S)], zFrom: 1, zTo: 1 },
+        { from: 'c', to: 'd', start: { x: S / 2, y: -S / 2, dir: 90 }, ops: [line(S)], zFrom: 1, zTo: 1 },
       ],
+      body: {
+        x: p.trackWidth * 0.3,
+        y: -S / 2 + p.trackWidth * 0.3,
+        w: S - p.trackWidth * 0.6,
+        h: S - p.trackWidth * 0.6,
+        zMin: 0,
+        zMax: 1,
+      },
+    },
+    {
+      code: 'XB4',
+      name: 'Bucket with lid (tunnel + crossing)',
+      category: 'crossing',
+      stock: 'XB',
+      description:
+        'The lid on top of the bucket: a 90° crossing 4 levels up, with a ground-level tunnel through the bucket underneath. Uses the same lid as XB.',
+      color: '#9ca3af',
+      selfSupporting: true,
+      approximate: true,
+      paths: [
+        { from: 'a', to: 'b', ops: [line(S)], zFrom: 4, zTo: 4 },
+        { from: 'c', to: 'd', start: { x: S / 2, y: -S / 2, dir: 90 }, ops: [line(S)], zFrom: 4, zTo: 4 },
+        { from: 'e', to: 'f', start: { x: 0, y: 0, dir: 0 }, ops: [line(S)], zFrom: 0, zTo: 0 },
+      ],
+      body: {
+        x: p.trackWidth * 0.3,
+        y: -S / 2 + p.trackWidth * 0.3,
+        w: S - p.trackWidth * 0.6,
+        h: S - p.trackWidth * 0.6,
+        zMin: 0,
+        zMax: 4,
+        tunnelAlongX: true,
+      },
     },
     // Supports (not placed directly; counted against raised joints)
     support('RR1', 'Riser pier', 1, 'Short pier that holds a joint one level up.', '#9a3412'),
@@ -333,8 +404,22 @@ export function resolveSpec(spec: PieceSpec, sampleStep = 8): PieceType {
       routes[path.from] ??= [];
     }
   }
+  const blockers: Sample[] = [];
+  if (spec.body) {
+    const b = spec.body;
+    const step = 15;
+    for (let z = b.zMin; z < b.zMax; z++)
+      for (let x = b.x; x <= b.x + b.w + 1e-6; x += step)
+        for (let y = b.y; y <= b.y + b.h + 1e-6; y += step) {
+          // keep the tunnel (along local x, centred on y = 0) open at ground level
+          if (b.tunnelAlongX && z === b.zMin && Math.abs(y) < 40) continue;
+          blockers.push({ x, y, z });
+        }
+  }
   return {
     ...spec,
+    stockCode: spec.stock ?? spec.code,
+    blockers,
     ports: [...ports.values()],
     samples,
     routes,

@@ -5,11 +5,26 @@ const FIELDS: { key: keyof GeometryParams; label: string; help: string; unit: 'l
   { key: 'straight', label: 'Straight length (S1)', help: 'End-to-end length of a standard straight.', unit: 'len' },
   { key: 'curveRadius', label: 'Curve radius (C)', help: 'Radius to the middle of the track on a standard curve.', unit: 'len' },
   { key: 'curveAngle', label: 'Curve angle', help: 'How far one curve turns. 45° means 8 curves make a circle.', unit: 'deg' },
-  { key: 'rampLength', label: 'Ramp length (AL)', help: 'Floor length of an ascending ramp.', unit: 'len' },
-  { key: 'parallelSpacing', label: 'Parallel track spacing', help: 'Distance between the two lanes after an offset switch (PR/PL).', unit: 'len' },
+  {
+    key: 'rampLength',
+    label: 'Straight ramp length',
+    help: 'Default floor length for custom straight ramps. (AL/AR/AR1 are climbing curves shaped like a C curve.)',
+    unit: 'len',
+  },
+  {
+    key: 'parallelSpacing',
+    label: 'Parallel track spacing',
+    help: 'Distance between the two lanes after an offset switch (PR/PL).',
+    unit: 'len',
+  },
   { key: 'trackWidth', label: 'Track width', help: 'Width of the track bed, used to detect overlaps.', unit: 'len' },
   { key: 'levelHeight', label: 'Level height', help: 'Height of one elevation level.', unit: 'len' },
-  { key: 'clearanceLevels', label: 'Clearance (levels)', help: 'How many levels one track must be above another to pass over it.', unit: 'count' },
+  {
+    key: 'clearanceLevels',
+    label: 'Clearance (levels)',
+    help: 'How many levels one track must be above another to pass over it.',
+    unit: 'count',
+  },
   { key: 'joinTolerance', label: 'Joint play', help: 'How far apart two ends can be and still click together.', unit: 'len' },
   { key: 'angleTolerance', label: 'Joint angle play', help: 'How much two ends can be twisted and still click together.', unit: 'deg' },
 ];
@@ -38,8 +53,8 @@ export function SettingsView() {
       <section>
         <h3>Track geometry calibration</h3>
         <p className="muted">
-          The manufacturer does not publish track dimensions, so these defaults are estimates. Measure your own pieces and enter the
-          numbers here; every piece, layout check and auto design updates to match.
+          The manufacturer does not publish track dimensions, so these defaults are estimates. Measure your own pieces and enter the numbers
+          here; every piece, layout check and auto design updates to match.
         </p>
         <div className="settings-grid">
           {FIELDS.map((f) => (

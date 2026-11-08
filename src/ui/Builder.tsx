@@ -39,7 +39,11 @@ export function Builder() {
   const [past, setPast] = useState<PlacedPiece[][]>([]);
   const [future, setFuture] = useState<PlacedPiece[][]>([]);
   const [sel, setSel] = useState<Selection>(null);
-  const [lastPlaced, setLastPlaced] = useState<{ uid: string; target: WorldPort | { x: number; y: number; dir: number; z: number }; inPort: string } | null>(null);
+  const [lastPlaced, setLastPlaced] = useState<{
+    uid: string;
+    target: WorldPort | { x: number; y: number; dir: number; z: number };
+    inPort: string;
+  } | null>(null);
   const [view, setView] = useState<View>({ tx: 300, ty: 250, s: 0.5 });
   const [labels, setLabels] = useState(true);
   const [onlyOwned, setOnlyOwned] = useState(true);
@@ -178,7 +182,9 @@ export function Builder() {
     const pts = worldSamples(cat, selectedPiece).flat();
     const c = { x: pts.reduce((a, p) => a + p.x, 0) / pts.length, y: pts.reduce((a, p) => a + p.y, 0) / pts.length };
     const r = rotate({ x: selectedPiece.x - c.x, y: selectedPiece.y - c.y }, deg);
-    setPieces((ps) => ps.map((p) => (p.uid === selectedPiece.uid ? { ...p, x: c.x + r.x, y: c.y + r.y, rot: (p.rot + deg + 360) % 360 } : p)));
+    setPieces((ps) =>
+      ps.map((p) => (p.uid === selectedPiece.uid ? { ...p, x: c.x + r.x, y: c.y + r.y, rot: (p.rot + deg + 360) % 360 } : p)),
+    );
   };
 
   const raiseSelected = (dz: number) => {
@@ -360,7 +366,7 @@ export function Builder() {
   const used = validation.counts;
   const palette = cat
     .trackPieces()
-    .filter((t) => !onlyOwned || (owned[t.code] ?? 0) > 0)
+    .filter((t) => !onlyOwned || (owned[t.stockCode] ?? 0) > 0)
     .sort((a, b) => a.category.localeCompare(b.category) || a.code.localeCompare(b.code));
   const sortedPieces = useMemo(() => [...pieces].sort((a, b) => a.z - b.z), [pieces]);
   const errors = validation.issues.filter((i) => i.severity === 'error').length;
@@ -379,20 +385,44 @@ export function Builder() {
           ))}
         </select>
         <input className="name" value={currentLayout.name} onChange={(e) => rename(e.target.value)} aria-label="Layout name" />
-        <button onClick={createLayout} title="New layout">New</button>
-        <button onClick={duplicateLayout} title="Duplicate layout">Copy</button>
-        <button onClick={deleteLayout} title="Delete layout">Delete</button>
+        <button onClick={createLayout} title="New layout">
+          New
+        </button>
+        <button onClick={duplicateLayout} title="Duplicate layout">
+          Copy
+        </button>
+        <button onClick={deleteLayout} title="Delete layout">
+          Delete
+        </button>
         <span className="sep" />
-        <button onClick={undo} disabled={!past.length} title="Undo (Ctrl+Z)">Undo</button>
-        <button onClick={redo} disabled={!future.length} title="Redo (Ctrl+Shift+Z)">Redo</button>
-        <button onClick={turnLast} disabled={!lastPlaced} title="Turn the last piece: left/right, or another switch leg (F)">Turn</button>
-        <button onClick={() => rotateSelected(45)} disabled={!selectedPiece} title="Rotate selected 45° (R)">Rotate</button>
-        <button onClick={() => raiseSelected(1)} disabled={!selectedPiece} title="Raise selected one level">Up</button>
-        <button onClick={() => raiseSelected(-1)} disabled={!selectedPiece} title="Lower selected one level">Down</button>
-        <button onClick={removeSelected} disabled={!selectedPiece && !lastPlaced} title="Delete selected (Del)">Remove</button>
-        <button onClick={clearAll} title="Remove all pieces">Clear</button>
+        <button onClick={undo} disabled={!past.length} title="Undo (Ctrl+Z)">
+          Undo
+        </button>
+        <button onClick={redo} disabled={!future.length} title="Redo (Ctrl+Shift+Z)">
+          Redo
+        </button>
+        <button onClick={turnLast} disabled={!lastPlaced} title="Turn the last piece: left/right, or another switch leg (F)">
+          Turn
+        </button>
+        <button onClick={() => rotateSelected(45)} disabled={!selectedPiece} title="Rotate selected 45° (R)">
+          Rotate
+        </button>
+        <button onClick={() => raiseSelected(1)} disabled={!selectedPiece} title="Raise selected one level">
+          Up
+        </button>
+        <button onClick={() => raiseSelected(-1)} disabled={!selectedPiece} title="Lower selected one level">
+          Down
+        </button>
+        <button onClick={removeSelected} disabled={!selectedPiece && !lastPlaced} title="Delete selected (Del)">
+          Remove
+        </button>
+        <button onClick={clearAll} title="Remove all pieces">
+          Clear
+        </button>
         <span className="sep" />
-        <button onClick={() => fit()} title="Zoom to fit">Fit</button>
+        <button onClick={() => fit()} title="Zoom to fit">
+          Fit
+        </button>
         <label className="check">
           <input type="checkbox" checked={labels} onChange={(e) => setLabels(e.target.checked)} /> Codes
         </label>
@@ -419,10 +449,15 @@ export function Builder() {
           </div>
           <div className="palette-list">
             {palette.map((t) => {
-              const have = owned[t.code] ?? 0;
-              const left = have - (used[t.code] ?? 0);
+              const have = owned[t.stockCode] ?? 0;
+              const left = have - (used[t.stockCode] ?? 0);
               return (
-                <button key={t.code} className={`palette-item ${left <= 0 ? 'none-left' : ''}`} onClick={() => place(t.code)} title={t.description}>
+                <button
+                  key={t.code}
+                  className={`palette-item ${left <= 0 ? 'none-left' : ''}`}
+                  onClick={() => place(t.code)}
+                  title={t.description}
+                >
                   <PieceIcon cat={cat} t={t} />
                   <span className="pi-code">{t.code}</span>
                   <span className="pi-name">{t.name}</span>
@@ -479,7 +514,14 @@ export function Builder() {
                   >
                     <circle cx={p.x} cy={p.y} r={r * 1.6} fill="transparent" />
                     <circle cx={p.x} cy={p.y} r={r} fill={isSel ? '#f59e0b' : '#22c55e'} stroke="#fff" strokeWidth={3 / view.s} />
-                    <line x1={p.x} y1={p.y} x2={p.x + d.x * r * 1.8} y2={p.y + d.y * r * 1.8} stroke={isSel ? '#f59e0b' : '#22c55e'} strokeWidth={5 / Math.max(view.s, 0.3)} />
+                    <line
+                      x1={p.x}
+                      y1={p.y}
+                      x2={p.x + d.x * r * 1.8}
+                      y2={p.y + d.y * r * 1.8}
+                      stroke={isSel ? '#f59e0b' : '#22c55e'}
+                      strokeWidth={5 / Math.max(view.s, 0.3)}
+                    />
                     {p.z !== 0 && (
                       <text x={p.x} y={p.y} className="port-z" fontSize={r * 1.1} textAnchor="middle" dominantBaseline="central">
                         {p.z}
@@ -488,7 +530,17 @@ export function Builder() {
                   </g>
                 );
               })}
-              {focusIssue?.at && <circle cx={focusIssue.at.x} cy={focusIssue.at.y} r={60} fill="none" stroke="#ef4444" strokeWidth={6} strokeDasharray="12 8" />}
+              {focusIssue?.at && (
+                <circle
+                  cx={focusIssue.at.x}
+                  cy={focusIssue.at.y}
+                  r={60}
+                  fill="none"
+                  stroke="#ef4444"
+                  strokeWidth={6}
+                  strokeDasharray="12 8"
+                />
+              )}
             </g>
           </svg>
           <div className="canvas-status">
@@ -499,9 +551,19 @@ export function Builder() {
               </span>
             )}
             <span className={errors ? 'bad' : warnings ? 'warn' : 'good'}>
-              {errors ? `${errors} error${errors > 1 ? 's' : ''}` : warnings ? `${warnings} warning${warnings > 1 ? 's' : ''}` : pieces.length ? 'All good' : ''}
+              {errors
+                ? `${errors} error${errors > 1 ? 's' : ''}`
+                : warnings
+                  ? `${warnings} warning${warnings > 1 ? 's' : ''}`
+                  : pieces.length
+                    ? 'All good'
+                    : ''}
             </span>
-            {validation.running.loopCount > 0 && <span>{validation.running.loopCount} loop{validation.running.loopCount > 1 ? 's' : ''}</span>}
+            {validation.running.loopCount > 0 && (
+              <span>
+                {validation.running.loopCount} loop{validation.running.loopCount > 1 ? 's' : ''}
+              </span>
+            )}
             <span className="legend">
               {[0, 1, 2, 3].map((z) => (
                 <span key={z}>
@@ -535,7 +597,14 @@ export function Builder() {
 }
 
 function PieceIcon({ cat, t }: { cat: ReturnType<typeof useStore>['catalog']; t: PieceType }) {
-  const piece: PlacedPiece = { uid: `icon-${t.code}`, code: t.code, x: 0, y: 0, rot: t.category === 'straight' || t.category === 'ramp' || t.category === 'bridge' ? 0 : 0, z: 0 };
+  const piece: PlacedPiece = {
+    uid: `icon-${t.code}`,
+    code: t.code,
+    x: 0,
+    y: 0,
+    rot: t.category === 'straight' || t.category === 'ramp' || t.category === 'bridge' ? 0 : 0,
+    z: 0,
+  };
   return (
     <span className="pi-icon">
       <LayoutPreview cat={cat} pieces={[piece]} size={40} />
@@ -544,7 +613,8 @@ function PieceIcon({ cat, t }: { cat: ReturnType<typeof useStore>['catalog']; t:
 }
 
 function IssueList({ issues, onFocus, focused }: { issues: Issue[]; onFocus: (i: Issue | null) => void; focused: Issue | null }) {
-  if (!issues.length) return <p className="muted">No problems found. Every end is connected, nothing overlaps, and you have enough pieces.</p>;
+  if (!issues.length)
+    return <p className="muted">No problems found. Every end is connected, nothing overlaps, and you have enough pieces.</p>;
   const order = { error: 0, warning: 1, info: 2 } as const;
   const sorted = [...issues].sort((a, b) => order[a.severity] - order[b.severity]);
   return (
@@ -617,9 +687,7 @@ function PartsList({
               .join(', ')}
             .
           </p>
-          {supportRows.length > 0 && (
-            <p className="muted">Uses: {supportRows.map(([c, n]) => `${n}× ${c}`).join(', ')}.</p>
-          )}
+          {supportRows.length > 0 && <p className="muted">Uses: {supportRows.map(([c, n]) => `${n}× ${c}`).join(', ')}.</p>}
         </>
       )}
     </div>
