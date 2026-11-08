@@ -17,7 +17,7 @@ sheets and the TrackMaster curve packs.
 
 | Rule | Value |
 | --- | --- |
-| Standard curve | Turns **60°**, so **6 make a circle** (older packs also had 45° curves) |
+| Standard curve | Turns **60°**, so **6 make a circle** (2009–2019 track used 45° curves; see the README) |
 | Switch | Straight leg = one standard straight; branch = one standard curve |
 | Offset switch (PR/PL) | Shifts the track **one lane** sideways and ends parallel |
 | Climbing piece | Rises **one level** |

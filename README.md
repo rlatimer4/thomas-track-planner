@@ -101,6 +101,28 @@ Contents are taken from each set's printed instructions ("What's Included"):
 Pieces whose shape couldn't be confirmed from the instructions (for example the `PR`/`PL` offset, the station and the junction
 base) are marked **estimated** in the catalog. Measure yours and calibrate in Settings, or add a custom piece.
 
+Another 86 sets are included from their instruction sheets, by model number (full contents in `src/core/kits.ts`). Where a sheet
+has no "What's Included" list, the kit is counted from the labelled pieces in its track layout, and the kit's source says so.
+
+| Track | Sets |
+| --- | --- |
+| **2018+** (60° `C` curves) | FXX64, FXX65, FXX66, FXX69, GFJ76, GGL75, GDV43/GLK09, GHK83, GLL14, GPD84, GPD88 |
+| **2014–2019** (45° `CS`/`CL` curves) | BDP11, BDP14/CJM95, BDP15, BHY49, BHY57, BHY58, CCF24, CCP27, CCP30, CDB57, CDB59, CDB60, CDB61, CDB66, CDB68, CHD21, CHX94/DPM62, CHY03, CHY06, DFM51, DFM53, DFM54, DFM61, DFN23, DFN29, DVF71, DVF73, DVF75, FBK07, FBK08, FBK47, FBK48, FBK52, FGR22/FPM59, FJK24, FJK25, FJK49, FJK50, FJL38, FJL40, FJL41, FJL44, GBN45, GPB49, BDP32, CCP26, CCP29 |
+| **2009–2013** original TrackMaster (45° `C1` curves) | BBP07, BDP10, R9485, R9488, R9490, R9491, R9629, T0210, T0211, T0212, T0787, Y2024, Y8756, Y8757, R9633, V1578, V1579, V6453, V6753, V7624, V7625, V8902, V8903, V8904, W3078, W3542, X0464, X5346/Y1700 |
+
+### Earlier track generations
+
+- **2014–2019 track** uses 45° curves (8 make a circle): `CS`, and `CL` on a larger radius. Its switches branch on one of them
+  (`TLS`/`TRS` on a CS, `TLL`/`TRL` on a CL, `YS`/`YL` both ways). `S2`, `S4` and `S8` are half, quarter and eighth straights.
+  `E…`/`ES…` are ramps and `EC…`/`EL`/`ER` climbing curves, each counted as one level. Codes it shares with the 2018+ track (`S1`,
+  `BS1`, `ES3`, `TU4`, `D1`, `RS1`–`RS3`, `RR1`) are the same pieces.
+- **2009–2013 track** has older connectors: the 2014 sets include `HT` adaptors to join it. Its curves are also 45°. Where its
+  printed code clashes with a later piece of a different shape, or it has no printed code, its code here ends in `-09` (for
+  example `S1-09`, `T2-09`, `AL-09`).
+- All of these are marked **estimated**: the angles come from the layout diagrams, but radii, ramp heights and short-straight
+  lengths are estimates. Auto design only uses pieces shaped like the standard 60° pieces, so 45° track is for the builder.
+- Play-feature track without a printed code (stations, tunnel bases, docks) isn't modelled; it's listed under each kit's extras.
+
 ## How auto design works
 
 1. **Main line.** All curves turn by the standard angle (60°, or whatever the C curve is defined as), and straight-like pieces
