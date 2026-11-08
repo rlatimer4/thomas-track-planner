@@ -7,8 +7,9 @@ import type { PathDef, PieceSpec } from './catalog';
 import { TRACK_STANDARD } from './standards';
 
 const A = TRACK_STANDARD.curveAngle; // 60°
-/** Half the long side of the track bucket, in straights (√3/2: its corner-to-corner tracks are 120° apart). */
-const BUCKET_HALF = Math.sqrt(3) / 2;
+/** Track bucket footprint, in straights: its corner-to-corner top tracks are one straight long and 120° apart. */
+const BUCKET_SHORT = 0.5; // sin 30°: the side the tunnel crosses
+const BUCKET_HALF = Math.sqrt(3) / 4; // half of the long side (cos 30° / 2)
 
 const through: PathDef = { from: 'a', to: 'b' }; // one standard straight
 const curve: PathDef = { from: 'a', to: 'b', turn: A }; // one standard curve (right when entered at a)
@@ -194,14 +195,14 @@ const CURRENT_PIECES: PieceSpec[] = [
     color: '#9ca3af',
     selfSupporting: true,
     approximate: true,
-    // Corner-to-corner tracks 120° apart need a footprint √3 times as long as it is wide. The tunnel
-    // (e→f, one straight) crosses the short way; the top tracks run between opposite corners, 2 straights each.
+    // Each top track is one straight running between opposite corners, 120° from the other, so the footprint is
+    // √3 times as long as it is wide. The tunnel (e→f) crosses the short way, half a straight.
     paths: [
-      { from: 'a', to: 'b', length: 2, level: 4, start: { side: -BUCKET_HALF, heading: 60 } },
-      { from: 'c', to: 'd', length: 2, level: 4, start: { side: BUCKET_HALF, heading: -60 } },
-      { from: 'e', to: 'f' },
+      { from: 'a', to: 'b', level: 4, start: { side: -BUCKET_HALF, heading: 60 } },
+      { from: 'c', to: 'd', level: 4, start: { side: BUCKET_HALF, heading: -60 } },
+      { from: 'e', to: 'f', length: BUCKET_SHORT },
     ],
-    body: { along: 0, side: -BUCKET_HALF, length: 1, width: 2 * BUCKET_HALF, zMin: 0, zMax: 4, tunnel: true },
+    body: { along: 0, side: -BUCKET_HALF, length: BUCKET_SHORT, width: 2 * BUCKET_HALF, zMin: 0, zMax: 4, tunnel: true },
   },
 
   // ------------------------------------------------------------------ supports (counted against raised joints, not placed)

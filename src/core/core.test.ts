@@ -211,17 +211,21 @@ describe('elevation', () => {
     const t = cat.get('BKT');
     const port = (id: string) => t.ports.find((p) => p.id === id)!;
     const S1 = cat.params.straight;
-    const half = (Math.sqrt(3) / 2) * S1;
-    // ends sit on the four corners of the footprint (tunnel axis = x, from 0 to one straight)
+    const half = (Math.sqrt(3) / 4) * S1;
+    const short = S1 / 2;
+    // ends sit on the four corners of the footprint (tunnel axis = x, half a straight across)
     for (const [id, x, y] of [
       ['a', 0, -half],
-      ['b', S1, half],
+      ['b', short, half],
       ['c', 0, half],
-      ['d', S1, -half],
+      ['d', short, -half],
     ] as const) {
       expect(port(id).x, id).toBeCloseTo(x);
       expect(port(id).y, id).toBeCloseTo(y);
     }
+    // each top track is as long as a standard straight
+    expect(Math.hypot(port('b').x - port('a').x, port('b').y - port('a').y)).toBeCloseTo(S1);
+    expect(Math.hypot(port('d').x - port('c').x, port('d').y - port('c').y)).toBeCloseTo(S1);
     // heading of each top track (its far end faces the way the track runs)
     const ab = port('b').dir;
     const cd = port('d').dir;
@@ -247,15 +251,15 @@ describe('elevation', () => {
     const S1 = cat.params.straight;
     // track joined to both tunnel mouths runs through underneath
     const before = placeChain(cat, startPose(-S1, 0, 0), [S]).pieces;
-    const after = placeChain(cat, startPose(S1, 0, 0), [S]).pieces;
+    const after = placeChain(cat, startPose(S1 / 2, 0, 0), [S]).pieces;
     const v = validateLayout(cat, [bucket, ...before, ...after]);
     expect(v.issues.some((i) => i.rule === 'overlap')).toBe(false);
     expect(v.conn.links.size).toBe(4);
     // straight running across the bucket sideways at ground level
-    const across = placeChain(cat, startPose(S1 / 2 + 30, -S1, 90), [S, S]).pieces;
+    const across = placeChain(cat, startPose(S1 / 4, -S1, 90), [S, S]).pieces;
     expect(validateLayout(cat, [bucket, ...across]).issues.some((i) => i.rule === 'overlap')).toBe(true);
     // the same at level 4 (on top) is fine only if it lines up with the lid; at level 2 it hits the bucket
-    const mid = placeChain(cat, startPose(S1 / 2 + 30, -S1, 90, 2), [S, S]).pieces;
+    const mid = placeChain(cat, startPose(S1 / 4, -S1, 90, 2), [S, S]).pieces;
     expect(validateLayout(cat, [bucket, ...mid]).issues.some((i) => i.rule === 'overlap')).toBe(true);
   });
 
