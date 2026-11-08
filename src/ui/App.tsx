@@ -40,7 +40,10 @@ export function App() {
       </header>
       <main className="main">
         {tab === 'build' && <Builder key={currentLayout.id} />}
-        {tab === 'auto' && <AutoView onOpen={() => setTab('build')} />}
+        {/* kept mounted so a running design and its results survive switching tabs */}
+        <div hidden={tab !== 'auto'}>
+          <AutoView onOpen={() => setTab('build')} />
+        </div>
         {tab === 'inventory' && <InventoryView />}
         {tab === 'catalog' && <CatalogView />}
         {tab === 'settings' && <SettingsView />}
