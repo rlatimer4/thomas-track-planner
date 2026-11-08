@@ -178,6 +178,11 @@ input[type='checkbox'] {
 .toolbar .name {
   width: 180px;
 }
+.toolbar button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
 .toolbar .sep {
   width: 1px;
   height: 24px;

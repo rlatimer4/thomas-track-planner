@@ -43,6 +43,10 @@ export function Builder() {
   const [past, setPast] = useState<PlacedPiece[][]>([]);
   const [future, setFuture] = useState<PlacedPiece[][]>([]);
   const [sel, setSel] = useState<Selection>(null);
+  // several pieces selected at once (box select, Shift+click, Ctrl+A)
+  const [group, setGroup] = useState<string[]>([]);
+  const [boxMode, setBoxMode] = useState(false);
+  const [box, setBox] = useState<{ a: { x: number; y: number }; b: { x: number; y: number } } | null>(null);
   const [lastPlaced, setLastPlaced] = useState<{
     uid: string;
     target: WorldPort | { x: number; y: number; dir: number; z: number };
@@ -78,6 +82,7 @@ export function Builder() {
     setPiecesRaw(past[past.length - 1]);
     setPast((h) => h.slice(0, -1));
     setSel(null);
+    setGroup([]);
     setLastPlaced(null);
   };
   const redo = () => {
@@ -86,6 +91,7 @@ export function Builder() {
     setPiecesRaw(future[0]);
     setFuture((f) => f.slice(1));
     setSel(null);
+    setGroup([]);
   };
 
   const validation = useMemo(() => validateLayout(cat, pieces, { owned, space: space ?? undefined }), [cat, pieces, owned, space]);
@@ -99,6 +105,24 @@ export function Builder() {
   const selectedPort: WorldPort | undefined =
     sel?.kind === 'port' ? openPorts.find((p) => p.uid === sel.uid && p.port === sel.port) : undefined;
   const selectedPiece = sel?.kind === 'piece' ? pieces.find((p) => p.uid === sel.uid) : undefined;
+  const groupSet = new Set(group.filter((u) => pieces.some((p) => p.uid === u)));
+  /** Pieces the edit tools act on: the multi-selection, or the single selected piece. */
+  const selectedUids = groupSet.size ? [...groupSet] : selectedPiece ? [selectedPiece.uid] : [];
+  const isSelected = (uid: string) => groupSet.has(uid) || (sel?.kind === 'piece' && sel.uid === uid);
+  const selectOnly = (uids: string[]) => {
+    setLastPlaced(null);
+    if (uids.length === 1) {
+      setGroup([]);
+      setSel({ kind: 'piece', uid: uids[0] });
+    } else {
+      setGroup(uids);
+      setSel(null);
+    }
+  };
+  const centreOf = (p: PlacedPiece) => {
+    const pts = worldSamples(cat, p).flat();
+    return { x: pts.reduce((a, q) => a + q.x, 0) / pts.length, y: pts.reduce((a, q) => a + q.y, 0) / pts.length };
+  };
 
   // ------------------------------------------------------------ view helpers
   const toWorld = useCallback(
@@ -171,10 +195,20 @@ export function Builder() {
   };
 
   const removeSelected = () => {
+    if (groupSet.size) {
+      setPieces((ps) => ps.filter((p) => !groupSet.has(p.uid)));
+      setGroup([]);
+      setSel(null);
+      setLastPlaced(null);
+      return;
+    }
     const uid = sel?.kind === 'piece' ? sel.uid : lastPlaced?.uid;
     if (!uid) return;
     // after deleting, select the open end it was attached to so building can continue
-    const mates = worldPorts(cat, pieces.find((p) => p.uid === uid)!)
+    const mates = worldPorts(
+      cat,
+      pieces.find((p) => p.uid === uid)!,
+    )
       .map((wp) => validation.conn.links.get(portKey(wp)))
       .filter(Boolean);
     setPieces((ps) => ps.filter((p) => p.uid !== uid));
@@ -183,24 +217,31 @@ export function Builder() {
   };
 
   const rotateSelected = (deg: number) => {
-    if (!selectedPiece) return;
-    const pts = worldSamples(cat, selectedPiece).flat();
+    if (!selectedUids.length) return;
+    const chosen = new Set(selectedUids);
+    // turn the whole selection about its middle
+    const pts = pieces.filter((p) => chosen.has(p.uid)).flatMap((p) => worldSamples(cat, p).flat());
     const c = { x: pts.reduce((a, p) => a + p.x, 0) / pts.length, y: pts.reduce((a, p) => a + p.y, 0) / pts.length };
-    const r = rotate({ x: selectedPiece.x - c.x, y: selectedPiece.y - c.y }, deg);
     setPieces((ps) =>
-      ps.map((p) => (p.uid === selectedPiece.uid ? { ...p, x: c.x + r.x, y: c.y + r.y, rot: (p.rot + deg + 360) % 360 } : p)),
+      ps.map((p) => {
+        if (!chosen.has(p.uid)) return p;
+        const r = rotate({ x: p.x - c.x, y: p.y - c.y }, deg);
+        return { ...p, x: c.x + r.x, y: c.y + r.y, rot: (p.rot + deg + 360) % 360 };
+      }),
     );
   };
 
   const raiseSelected = (dz: number) => {
-    if (!selectedPiece) return;
-    setPieces((ps) => ps.map((p) => (p.uid === selectedPiece.uid ? { ...p, z: Math.max(-3, p.z + dz) } : p)));
+    if (!selectedUids.length) return;
+    const chosen = new Set(selectedUids);
+    setPieces((ps) => ps.map((p) => (chosen.has(p.uid) ? { ...p, z: Math.max(-3, p.z + dz) } : p)));
   };
 
   const clearAll = () => {
     if (pieces.length && !confirm('Remove all pieces from this layout?')) return;
     setPieces([]);
     setSel(null);
+    setGroup([]);
     setLastPlaced(null);
   };
 
@@ -223,11 +264,41 @@ export function Builder() {
     return best ? { ...piece, ...best.pose } : piece;
   };
 
+  // snap a dragged group by sliding it so one of its open ends meets a nearby open end of the rest
+  const snapGroup = (all: PlacedPiece[], uids: Set<string>): PlacedPiece[] => {
+    const others = computeConnectivity(
+      cat,
+      all.filter((p) => !uids.has(p.uid)),
+    ).open;
+    const ownOpen = computeConnectivity(
+      cat,
+      all.filter((p) => uids.has(p.uid)),
+    ).open;
+    let best: { d: number; dx: number; dy: number } | undefined;
+    for (const mine of ownOpen)
+      for (const o of others) {
+        const d = Math.hypot(o.x - mine.x, o.y - mine.y);
+        if (d > 40 || Math.abs(angleDiff(mine.dir, o.dir + 180)) > 25) continue;
+        if (!best || d < best.d) best = { d, dx: o.x - mine.x, dy: o.y - mine.y };
+      }
+    if (!best) return all;
+    const { dx, dy } = best;
+    return all.map((p) => (uids.has(p.uid) ? { ...p, x: p.x + dx, y: p.y + dy } : p));
+  };
+
   // ------------------------------------------------------------ pointer handling
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const gesture = useRef<
     | { kind: 'pan'; startX: number; startY: number; view: View }
-    | { kind: 'drag'; uid: string; start: { x: number; y: number }; orig: PlacedPiece; moved: boolean; before: PlacedPiece[] }
+    | {
+        kind: 'drag';
+        uids: Set<string>;
+        start: { x: number; y: number };
+        orig: Map<string, PlacedPiece>;
+        moved: boolean;
+        before: PlacedPiece[];
+      }
+    | { kind: 'box'; start: { x: number; y: number }; add: boolean; onPiece?: string }
     | { kind: 'pinch'; dist: number; mid: { x: number; y: number }; view: View }
     | null
   >(null);
@@ -240,6 +311,12 @@ export function Builder() {
       gesture.current = { kind: 'pinch', dist: Math.hypot(a.x - b.x, a.y - b.y), mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, view };
       return;
     }
+    if (boxMode || e.shiftKey) {
+      const start = toWorld(e.clientX, e.clientY);
+      gesture.current = { kind: 'box', start, add: e.ctrlKey || e.metaKey };
+      setBox({ a: start, b: start });
+      return;
+    }
     gesture.current = { kind: 'pan', startX: e.clientX, startY: e.clientY, view };
   };
 
@@ -247,9 +324,28 @@ export function Builder() {
     e.stopPropagation();
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    const orig = pieces.find((p) => p.uid === uid)!;
-    setSel({ kind: 'piece', uid });
-    gesture.current = { kind: 'drag', uid, start: toWorld(e.clientX, e.clientY), orig, moved: false, before: pieces };
+    // Shift/Ctrl/Cmd+click adds or removes a piece from the selection
+    if (e.shiftKey || e.ctrlKey || e.metaKey) {
+      const current = selectedUids;
+      selectOnly(current.includes(uid) ? current.filter((u) => u !== uid) : [...current, uid]);
+      gesture.current = null;
+      return;
+    }
+    // in Select mode a drag that starts on an unselected piece draws a box, like one started on empty space
+    if (boxMode && !groupSet.has(uid)) {
+      const start = toWorld(e.clientX, e.clientY);
+      gesture.current = { kind: 'box', start, add: false, onPiece: uid };
+      setBox({ a: start, b: start });
+      return;
+    }
+    // dragging a piece of the multi-selection moves all of it; otherwise just this piece
+    const uids = groupSet.has(uid) ? new Set(groupSet) : new Set([uid]);
+    if (!groupSet.has(uid)) {
+      setGroup([]);
+      setSel({ kind: 'piece', uid });
+    }
+    const orig = new Map(pieces.filter((p) => uids.has(p.uid)).map((p) => [p.uid, p] as const));
+    gesture.current = { kind: 'drag', uids, start: toWorld(e.clientX, e.clientY), orig, moved: false, before: pieces };
   };
 
   const onMove = (e: React.PointerEvent) => {
@@ -274,7 +370,14 @@ export function Builder() {
       const dy = w.y - g.start.y;
       if (!g.moved && Math.hypot(dx, dy) * view.s < 4) return;
       g.moved = true;
-      setPiecesRaw((ps) => ps.map((p) => (p.uid === g.uid ? { ...g.orig, x: g.orig.x + dx, y: g.orig.y + dy } : p)));
+      setPiecesRaw((ps) =>
+        ps.map((p) => {
+          const o = g.orig.get(p.uid);
+          return o ? { ...o, x: o.x + dx, y: o.y + dy } : p;
+        }),
+      );
+    } else if (g.kind === 'box') {
+      setBox({ a: g.start, b: toWorld(e.clientX, e.clientY) });
     }
   };
 
@@ -282,11 +385,35 @@ export function Builder() {
     pointers.current.delete(e.pointerId);
     const g = gesture.current;
     if (g?.kind === 'drag' && g.moved) {
-      setPiecesRaw(pieces.map((p) => (p.uid === g.uid ? snap(p) : p)));
+      setPiecesRaw(g.uids.size === 1 ? pieces.map((p) => (g.uids.has(p.uid) ? snap(p) : p)) : snapGroup(pieces, g.uids));
       setPast((h) => [...h.slice(-MAX_HISTORY), g.before]);
       setFuture([]);
     } else if (g?.kind === 'pan' && Math.hypot(e.clientX - g.startX, e.clientY - g.startY) < 4) {
       setSel(null);
+      setGroup([]);
+    } else if (g?.kind === 'box' && box && g.onPiece && Math.hypot(box.b.x - box.a.x, box.b.y - box.a.y) * view.s < 4) {
+      // a click (not a drag) on a piece selects it
+      selectOnly([g.onPiece]);
+      setBox(null);
+    } else if (g?.kind === 'box' && box) {
+      // select the pieces whose middle is inside the box
+      const x0 = Math.min(box.a.x, box.b.x);
+      const x1 = Math.max(box.a.x, box.b.x);
+      const y0 = Math.min(box.a.y, box.b.y);
+      const y1 = Math.max(box.a.y, box.b.y);
+      const inside = pieces
+        .filter((p) => {
+          const c = centreOf(p);
+          return c.x >= x0 && c.x <= x1 && c.y >= y0 && c.y <= y1;
+        })
+        .map((p) => p.uid);
+      const next = g.add ? [...new Set([...selectedUids, ...inside])] : inside;
+      if (next.length) selectOnly(next);
+      else {
+        setSel(null);
+        setGroup([]);
+      }
+      setBox(null);
     }
     if (pointers.current.size === 0) gesture.current = null;
   };
@@ -317,7 +444,14 @@ export function Builder() {
         e.preventDefault();
         turnLast();
       } else if (e.key.toLowerCase() === 'r') rotateSelected(e.shiftKey ? -45 : 45);
-      else if (e.key === 'Escape') setSel(null);
+      else if (mod && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        selectOnly(pieces.map((p) => p.uid));
+      } else if (e.key === 'Escape') {
+        setSel(null);
+        setGroup([]);
+        setBox(null);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -421,20 +555,28 @@ export function Builder() {
         <button onClick={turnLast} disabled={!lastPlaced} title="Turn the last piece: left/right, or another switch leg (F)">
           Turn
         </button>
-        <button onClick={() => rotateSelected(45)} disabled={!selectedPiece} title="Rotate selected 45° (R)">
+        <button onClick={() => rotateSelected(45)} disabled={!selectedUids.length} title="Rotate selected 45° (R)">
           Rotate
         </button>
-        <button onClick={() => raiseSelected(1)} disabled={!selectedPiece} title="Raise selected one level">
+        <button onClick={() => raiseSelected(1)} disabled={!selectedUids.length} title="Raise selected one level">
           Up
         </button>
-        <button onClick={() => raiseSelected(-1)} disabled={!selectedPiece} title="Lower selected one level">
+        <button onClick={() => raiseSelected(-1)} disabled={!selectedUids.length} title="Lower selected one level">
           Down
         </button>
-        <button onClick={removeSelected} disabled={!selectedPiece && !lastPlaced} title="Delete selected (Del)">
+        <button onClick={removeSelected} disabled={!selectedUids.length && !lastPlaced} title="Delete selected (Del)">
           Remove
         </button>
         <button onClick={clearAll} title="Remove all pieces">
           Clear
+        </button>
+        <button
+          className={boxMode ? 'active' : ''}
+          aria-pressed={boxMode}
+          onClick={() => setBoxMode((b) => !b)}
+          title="Box select: drag over pieces to select them (or Shift+drag at any time). Ctrl+drag adds to the selection; Ctrl+A selects all."
+        >
+          Select
         </button>
         <span className="sep" />
         <button onClick={() => fit()} title="Zoom to fit">
@@ -461,11 +603,15 @@ export function Builder() {
             </label>
           </div>
           <div className="palette-hint">
-            {selectedPort
-              ? `Adding at the selected end (level ${selectedPort.z}).`
-              : pieces.length
-                ? 'Tap a green end to attach, or a piece to move it.'
-                : 'Tap a piece to start.'}
+            {groupSet.size
+              ? `${groupSet.size} pieces selected: drag one to move them all, R to rotate, Del to remove.`
+              : boxMode
+                ? 'Drag a box over the pieces to select.'
+                : selectedPort
+                  ? `Adding at the selected end (level ${selectedPort.z}).`
+                  : pieces.length
+                    ? 'Tap a green end to attach, or a piece to move it.'
+                    : 'Tap a piece to start.'}
           </div>
           <div className="palette-list">
             {palette.map((t) => {
@@ -513,7 +659,7 @@ export function Builder() {
                   cat={cat}
                   piece={p}
                   labels={labels}
-                  selected={sel?.kind === 'piece' && sel.uid === p.uid}
+                  selected={isSelected(p.uid)}
                   problem={problemUids.has(p.uid) || focusUids.has(p.uid)}
                   onPointerDown={onPieceDown}
                 />
@@ -530,6 +676,7 @@ export function Builder() {
                     onPointerDown={(e) => {
                       e.stopPropagation();
                       setSel({ kind: 'port', uid: p.uid, port: p.port });
+                      setGroup([]);
                       setLastPlaced(null);
                     }}
                   >
@@ -551,6 +698,19 @@ export function Builder() {
                   </g>
                 );
               })}
+              {box && (
+                <rect
+                  x={Math.min(box.a.x, box.b.x)}
+                  y={Math.min(box.a.y, box.b.y)}
+                  width={Math.abs(box.b.x - box.a.x)}
+                  height={Math.abs(box.b.y - box.a.y)}
+                  fill="rgba(59,130,246,0.1)"
+                  stroke="#3b82f6"
+                  strokeWidth={2 / view.s}
+                  strokeDasharray={`${8 / view.s} ${6 / view.s}`}
+                  pointerEvents="none"
+                />
+              )}
               {focusIssue?.at && (
                 <circle
                   cx={focusIssue.at.x}
