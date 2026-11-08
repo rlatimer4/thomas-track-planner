@@ -13,7 +13,12 @@
   --canvas: #f8fafc;
   --chip: #eef2ff;
   color-scheme: light dark;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
   font-size: 15px;
   color: var(--text);
   background: var(--bg);
@@ -663,5 +668,159 @@ tr.short td {
   }
   .toolbar .name {
     width: 120px;
+  }
+}
+
+/* ---------- piece editor */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 16px;
+}
+.modal {
+  background: var(--bg);
+  border-radius: 14px;
+  width: min(1100px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.modal-head,
+.modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--panel);
+}
+.modal-head {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+.modal-head h3 {
+  margin: 0;
+}
+.modal-foot {
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+}
+.modal-foot .muted {
+  margin-right: auto;
+}
+.editor-grid {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 14px;
+  padding: 14px;
+  overflow-y: auto;
+}
+.editor-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.editor-form h4 {
+  margin: 8px 0 0;
+}
+.editor-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.preview {
+  position: sticky;
+  top: 0;
+}
+.nf {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.85em;
+}
+.nf > span:first-child {
+  color: var(--muted);
+}
+.nf.grow {
+  flex: 1;
+}
+.nf input,
+.nf select {
+  font-size: 1rem;
+}
+.row.wrap {
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.path-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+}
+.path-head,
+.path-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+}
+.errors {
+  color: var(--bad);
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.85em;
+}
+.facts {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.guide dt {
+  font-weight: 600;
+  margin-top: 6px;
+}
+.guide dd {
+  margin: 0;
+  color: var(--muted);
+}
+.port-label {
+  fill: #15803d;
+  font-weight: 700;
+  font-family: sans-serif;
+}
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.path-summary {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--muted);
+}
+.card-actions {
+  gap: 12px;
+}
+.standard h4 {
+  margin: 6px 0;
+}
+@media (max-width: 760px) {
+  .editor-grid {
+    grid-template-columns: 1fr;
+  }
+  .modal-backdrop {
+    padding: 0;
+  }
+  .modal {
+    border-radius: 0;
+    height: 100%;
   }
 }

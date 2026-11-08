@@ -8,3 +8,7 @@ export * from './graph';
 export * from './validate';
 export * from './autogen';
 export * from './svg';
+export * from './operations';
+export * from './sharing';
+export * from './standards';
+export * from './pieces';

@@ -45,7 +45,7 @@ export function successors(cat: Catalog, byUid: Map<string, PlacedPiece>, conn: 
 }
 
 /** Tarjan SCC over the state graph. */
-function sccs(nodes: string[], edges: Map<string, string[]>): string[][] {
+export function sccs(nodes: string[], edges: Map<string, string[]>): string[][] {
   let index = 0;
   const idx = new Map<string, number>();
   const low = new Map<string, number>();
@@ -96,7 +96,8 @@ function sccs(nodes: string[], edges: Map<string, string[]>): string[][] {
   return out;
 }
 
-export function analyzeRunning(cat: Catalog, pieces: PlacedPiece[], conn = computeConnectivity(cat, pieces)): RunAnalysis {
+/** Directed graph of train states: piece entered through a port -> next states. */
+export function stateGraph(cat: Catalog, pieces: PlacedPiece[], conn: Connectivity): { nodes: string[]; edges: Map<string, string[]> } {
   const byUid = new Map(pieces.map((p) => [p.uid, p]));
   const nodes: string[] = [];
   const edges = new Map<string, string[]>();
@@ -111,6 +112,12 @@ export function analyzeRunning(cat: Catalog, pieces: PlacedPiece[], conn = compu
       edges.set(k, Array.isArray(succ) ? succ.map(stateKey) : []);
     }
   }
+  return { nodes, edges };
+}
+
+export function analyzeRunning(cat: Catalog, pieces: PlacedPiece[], conn = computeConnectivity(cat, pieces)): RunAnalysis {
+  const byUid = new Map(pieces.map((p) => [p.uid, p]));
+  const { nodes, edges } = stateGraph(cat, pieces, conn);
   const comps = sccs(nodes, edges);
   const onCycle = new Set<string>();
   for (const c of comps) {

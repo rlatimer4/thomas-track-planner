@@ -3,13 +3,14 @@
  *
  * Strategy
  * 1. Main line: every curve in the system turns by the same angle with the same radius,
- *    and the straight-like pieces (straights, switch through-legs, station lanes, ramps)
- *    are multiples of half a straight. A loop closes exactly when (a) the sequence of
+ *    and the straight-like pieces (straights, switch through-legs, station lanes) are
+ *    multiples of half a straight. Climbing pieces have the same plan shape as a curve. A loop closes exactly when (a) the sequence of
  *    curves closes on its own and (b) the straight runs in opposite headings have equal
  *    total length. We enumerate closing curve sequences ("turn words"), then size the
  *    straight runs to satisfy (b). This finds exact loops quickly without blind search.
- * 2. Elevation: ramps are placed as a balanced up/down sequence so the line never goes
- *    below ground, which lets figure-8s cross over themselves on a raised section.
+ * 2. Elevation: some curves of the loop are made climbing curves (AL/AR/AR1), as a
+ *    balanced up/down sequence so the line never goes below ground or above level 3.
+ *    This lets figure-8s cross over themselves on a raised section.
  * 3. Decoration: straights on the finished loop are swapped for same-length switches to
  *    add passing loops, sidings with buffer stops, offset double track and the station.
  *    Branch connections are found by a small bounded search.
@@ -18,7 +19,7 @@
  *    grade separation at crossings, no switches on grades, tangents between reverse
  *    curves, supports available for raised track, fits the space).
  */
-import { dist, normDeg, stepPose, type Pose, type Sample, type Vec } from './geometry';
+import { angleDiff, dist, normDeg, stepPose, type Pose, type Sample, type Vec } from './geometry';
 import type { Catalog, PieceType } from './catalog';
 import type { Counts } from './inventory';
 import { placeAt, placeChain, startPose, type ChainStep } from './build';
@@ -29,6 +30,7 @@ import {
   portsMate,
   rotateLayout,
   worldPorts,
+  worldBlockers,
   worldSamples,
   type PlacedPiece,
   type WorldPort,
@@ -123,7 +125,8 @@ class SampleGrid {
 interface Pools {
   straight: string[];
   curve: string[];
-  ramp: string[];
+  /** Climbing curves, by which way they turn while going UP (+1 right, -1 left). */
+  rampByTurn: Record<number, string[]>;
   buffer: string[];
 }
 
@@ -147,13 +150,28 @@ export function piecePools(cat: Catalog): Pools {
   const ref = (code: string) => (cat.has(code) ? cat.get(code) : undefined);
   const S = ref('S1');
   const C = ref('C');
-  const A = ref('AL');
   const sorted = (xs: PieceType[]) => xs.map((t) => t.code).sort((a, b) => prefIndex(a) - prefIndex(b));
   const tracks = cat.trackPieces();
+  // a climbing curve is usable in a loop when its plan shape is a standard curve (either hand)
+  const climbTurn = (t: PieceType): number => {
+    if (t.category !== 'ramp' || t.ports.length !== 2 || !C) return 0;
+    const [lo, hi] = [...t.ports].sort((x, y) => x.z - y.z);
+    if (hi.z - lo.z !== 1) return 0;
+    const turn = angleDiff(hi.dir, lo.dir + 180);
+    const chord = Math.hypot(hi.x - lo.x, hi.y - lo.y);
+    const [ca, cb] = C.ports;
+    const cChord = Math.hypot(ca.x - cb.x, ca.y - cb.y);
+    if (Math.abs(Math.abs(turn) - cat.standardTurn()) > 0.5 || Math.abs(chord - cChord) > 0.5) return 0;
+    if (lo.id !== 'a') return 0; // generator enters ramps at 'a' to climb
+    return Math.sign(turn);
+  };
   return {
     straight: S ? sorted(tracks.filter((t) => t.category === 'straight' && sameGeometry(t, S))) : [],
     curve: C ? sorted(tracks.filter((t) => t.category === 'curve' && sameGeometry(t, C))) : [],
-    ramp: A ? sorted(tracks.filter((t) => t.category === 'ramp' && sameGeometry(t, A))) : [],
+    rampByTurn: {
+      1: sorted(tracks.filter((t) => climbTurn(t) === 1)),
+      [-1]: sorted(tracks.filter((t) => climbTurn(t) === -1)),
+    },
     buffer: sorted(tracks.filter((t) => t.category === 'buffer')),
   };
 }
@@ -234,9 +252,8 @@ export function closingWords(maxCurves: number, angle: number, allowNetZero: boo
 // ---------------------------------------------------------------- main loop
 
 type Slot =
-  | { kind: 'curve'; turn: number }
-  | { kind: 'straight' }
-  | { kind: 'ramp'; up: boolean };
+  /** climb: +1 climbs one level through this curve, -1 descends, 0 flat */
+  { kind: 'curve'; turn: number; climb: number } | { kind: 'straight' };
 
 interface LoopPlan {
   word: TurnWord;
@@ -248,12 +265,12 @@ interface LoopGeometry {
   perCircle: number;
   /** half a straight, mm: the length unit for runs */
   unit: number;
-  /** ramp length in units, or 0 if ramps don't fit the unit grid */
-  rampUnits: number;
   radius: number;
   angle: number;
   /** allowed closing error, mm */
   tolerance: number;
+  /** highest level the generator may climb to */
+  maxLevel: number;
 }
 
 /** Displacement of the curves alone (no straights), and the heading of each run. */
@@ -268,84 +285,107 @@ function curveSkeleton(word: TurnWord, g: LoopGeometry) {
 }
 
 /**
- * Build a slot plan for one turn word: decide where ramps go and how many straights each
- * run between curves gets so the loop closes (within tolerance).
+ * Choose which curves of the word climb or descend. Climbing pieces are curves, so a
+ * right-hand curve can climb on a piece that turns right going up, or descend on one that
+ * turns left going up (travelling down a ramp turns the other way). The sequence of ups
+ * and downs is balanced and never goes below ground or above `maxLevel`.
+ */
+function assignClimbs(rng: Rng, word: TurnWord, pairs: number, rampsOwned: Record<number, number>, maxLevel: number): number[] | undefined {
+  const m = word.length;
+  const climbs = Array(m).fill(0);
+  if (pairs === 0) return climbs;
+  if (2 * pairs > m) return undefined;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const idx = shuffle(rng, [...Array(m).keys()])
+      .slice(0, 2 * pairs)
+      .sort((a, b) => a - b);
+    const seq: number[] = [];
+    let z = 0,
+      ups = pairs,
+      downs = pairs;
+    while (ups + downs > 0) {
+      const canUp = ups > 0 && z < maxLevel;
+      const canDown = downs > 0 && z > 0;
+      const up = canUp && (!canDown || rng() < 0.5);
+      seq.push(up ? 1 : -1);
+      z += up ? 1 : -1;
+      if (up) ups--;
+      else downs--;
+    }
+    // pieces needed: going up through a turn t needs a ramp that turns t going up; going down needs -t
+    const need: Record<number, number> = { 1: 0, [-1]: 0 };
+    idx.forEach((i, k) => (need[word[i] * seq[k]] += 1));
+    if (need[1] > (rampsOwned[1] ?? 0) || need[-1] > (rampsOwned[-1] ?? 0)) continue;
+    idx.forEach((i, k) => (climbs[i] = seq[k]));
+    return climbs;
+  }
+  return undefined;
+}
+
+/**
+ * Build a slot plan for one turn word: decide which curves climb and how many straights
+ * each run between curves gets so the loop closes (within tolerance).
  */
 function planLoop(
   rng: Rng,
   word: TurnWord,
   g: LoopGeometry,
-  budget: { straight: number; ramp: number },
+  budget: { straight: number; rampsOwned: Record<number, number> },
   rampPairs: number,
 ): LoopPlan | undefined {
   const m = word.length;
   const { dx, dy, headings } = curveSkeleton(word, g);
   const half = g.perCircle / 2;
   if (g.perCircle % 2 !== 0) return undefined;
-
-  // ramps: a balanced up/down sequence assigned to runs in loop order (never below ground)
-  const rampSeq: boolean[] = [];
-  if (rampPairs > 0 && g.rampUnits > 0) {
-    let z = 0;
-    let ups = rampPairs,
-      downs = rampPairs;
-    while (ups + downs > 0) {
-      const canUp = ups > 0 && z < 2;
-      const canDown = downs > 0 && z > 0;
-      const up = canUp && (!canDown || rng() < 0.5);
-      rampSeq.push(up);
-      z += up ? 1 : -1;
-      if (up) ups--;
-      else downs--;
-    }
-  }
-  if (rampSeq.length > budget.ramp) return undefined;
-  const rampRuns = rampSeq.map(() => randInt(rng, 0, m - 1)).sort((a, b) => a - b);
-  const runRamps: boolean[][] = Array.from({ length: m }, () => []);
-  rampRuns.forEach((r, i) => runRamps[r].push(rampSeq[i]));
-
-  // fixed (ramp) length per heading class, in units
-  const fixed = Array(g.perCircle).fill(0);
-  runRamps.forEach((rs, i) => (fixed[headings[i]] += rs.length * g.rampUnits));
+  const climbs = assignClimbs(rng, word, rampPairs, budget.rampsOwned, g.maxLevel);
+  if (!climbs) return undefined;
   const runsOf = (k: number) => headings.map((h, i) => (h === k ? i : -1)).filter((i) => i >= 0);
 
-  // Solve sum_k net_k * unit * e_k = -(dx, dy), where net_k = T_k - T_{k+half} for k < half.
-  // Only the 8-direction (45°) case gets the fast solver; other angles need exact closure.
+  // Solve sum_k net_k * unit * e_k = -(dx, dy), where e_k is the direction of heading k and
+  // net_k = T_k - T_{k+half} is the straight length in heading k minus the opposite heading.
+  // Straights are 2 units long, so nets are even. Enumerate the nets of headings 1..half-1 and
+  // pick heading 0's net to cancel x; keep combinations that also cancel y within tolerance.
   const solutions: number[][] = [];
-  if (g.perCircle === 8) {
-    const r2 = Math.SQRT1_2;
-    const tx = -dx / g.unit;
-    const ty = -dy / g.unit;
-    for (let n1 = -8; n1 <= 8; n1++)
-      for (let n3 = -8; n3 <= 8; n3++) {
-        const n0f = tx - (n1 - n3) * r2;
-        const n2f = ty - (n1 + n3) * r2;
-        for (const n0 of [Math.floor(n0f), Math.ceil(n0f)])
-          for (const n2 of [Math.floor(n2f), Math.ceil(n2f)]) {
-            const ex = (n0 + (n1 - n3) * r2 - tx) * g.unit;
-            const ey = (n2 + (n1 + n3) * r2 - ty) * g.unit;
-            if (Math.hypot(ex, ey) <= g.tolerance) solutions.push([n0, n1, n2, n3]);
-          }
+  const step = 360 / g.perCircle;
+  const dirs = Array.from({ length: half }, (_, k) => ({
+    x: Math.cos((k * step * Math.PI) / 180),
+    y: Math.sin((k * step * Math.PI) / 180),
+  }));
+  const tx = -dx / g.unit;
+  const ty = -dy / g.unit;
+  const range = half <= 3 ? 8 : 5;
+  const nets = Array(half).fill(0);
+  const search = (k: number, sx: number, sy: number) => {
+    if (k === half) {
+      const n0f = tx - sx;
+      for (const n0 of [2 * Math.floor(n0f / 2), 2 * Math.ceil(n0f / 2)]) {
+        const ex = (n0 + sx - tx) * g.unit;
+        const ey = (sy - ty) * g.unit;
+        if (Math.hypot(ex, ey) <= g.tolerance) solutions.push([n0, ...nets.slice(1)]);
       }
-  } else if (Math.hypot(dx, dy) < 1e-6) {
-    solutions.push(Array(half).fill(0));
-  }
+      return;
+    }
+    for (let m = -range; m <= range; m++) {
+      nets[k] = 2 * m;
+      search(k + 1, sx + 2 * m * dirs[k].x, sy + 2 * m * dirs[k].y);
+    }
+  };
+  if (half >= 1) search(1, 0, 0);
   if (!solutions.length) return undefined;
 
   for (const net of shuffle(rng, solutions).slice(0, 6)) {
     const s = Array(m).fill(0);
     let ok = true;
     for (let k = 0; k < half && ok; k++) {
-      // straights in units of 2: 2*(sA - sB) = net_k - (fixed_k - fixed_{k+half})
-      const need = net[k] - (fixed[k] - fixed[k + half]);
-      if (need % 2 !== 0) {
+      // straights are 2 units long: 2*(sA - sB) = net_k
+      if (net[k] % 2 !== 0) {
         ok = false;
         break;
       }
-      const d = need / 2;
+      const d = net[k] / 2;
       const A = runsOf(k);
       const B = runsOf(k + half);
-      let extra = A.length && B.length ? (rng() < 0.5 ? 0 : randInt(rng, 0, 2)) : 0;
+      const extra = A.length && B.length ? (rng() < 0.5 ? 0 : randInt(rng, 0, 2)) : 0;
       let sA = Math.max(d, 0) + extra;
       let sB = Math.max(-d, 0) + extra;
       if ((sA > 0 && !A.length) || (sB > 0 && !B.length)) {
@@ -354,24 +394,15 @@ function planLoop(
       }
       while (sA-- > 0) s[pick(rng, A)]++;
       while (sB-- > 0) s[pick(rng, B)]++;
-      extra = 0;
     }
     if (!ok) continue;
     if (s.reduce((a, b) => a + b, 0) > budget.straight) continue;
     const slots: Slot[] = [];
     for (let i = 0; i < m; i++) {
-      slots.push({ kind: 'curve', turn: word[i] });
-      const run: Slot[] = Array.from({ length: s[i] }, () => ({ kind: 'straight' }) as Slot);
-      // ramps go at random positions inside the run but keep their order
-      let pos = 0;
-      for (const up of runRamps[i]) {
-        pos = randInt(rng, pos, run.length);
-        run.splice(pos, 0, { kind: 'ramp', up });
-        pos++;
-      }
-      slots.push(...run);
+      slots.push({ kind: 'curve', turn: word[i], climb: climbs[i] });
+      for (let j = 0; j < s[i]; j++) slots.push({ kind: 'straight' });
     }
-    return { word, slots, ramps: rampSeq.length };
+    return { word, slots, ramps: 2 * rampPairs };
   }
   return undefined;
 }
@@ -385,23 +416,25 @@ interface Built {
 function buildLoop(cat: Catalog, pools: Pools, plan: LoopPlan, owned: Counts): Built | undefined {
   const avail = { ...owned };
   const steps: ChainStep[] = [];
-  // compute z per slot to pick support-friendly pieces for raised track
+  // track the level so raised sections get support-friendly pieces
   let z = 0;
   for (const slot of plan.slots) {
     let code: string | undefined;
-    if (slot.kind === 'curve') {
+    if (slot.kind === 'curve' && slot.climb !== 0) {
+      // up through turn t: a ramp turning t going up, entered low. Down: one turning -t, entered high.
+      const pool = pools.rampByTurn[slot.turn * slot.climb] ?? [];
+      code = takeFrom(avail, pool);
+      if (!code) return undefined;
+      steps.push(slot.climb > 0 ? { code, inPort: 'a', outPort: 'b' } : { code, inPort: 'b', outPort: 'a' });
+      z += slot.climb;
+    } else if (slot.kind === 'curve') {
       code = takeFrom(avail, pools.curve, (c) => (z > 0 && c === 'CU4' ? -1 : prefIndex(c)));
       if (!code) return undefined;
       steps.push({ code, inPort: slot.turn > 0 ? 'a' : 'b', outPort: slot.turn > 0 ? 'b' : 'a' });
-    } else if (slot.kind === 'straight') {
+    } else {
       code = takeFrom(avail, pools.straight, (c) => (z > 0 && (c === 'TU4' || c === 'ES3') ? -1 : prefIndex(c)));
       if (!code) return undefined;
       steps.push({ code, inPort: 'a', outPort: 'b' });
-    } else {
-      code = takeFrom(avail, pools.ramp);
-      if (!code) return undefined;
-      steps.push(slot.up ? { code, inPort: 'a', outPort: 'b' } : { code, inPort: 'b', outPort: 'a' });
-      z += slot.up ? 1 : -1;
     }
   }
   const { pieces, end } = placeChain(cat, startPose(), steps);
@@ -437,7 +470,10 @@ function replaceInline(cat: Catalog, st: DecorState, uid: string, code: string, 
 
 function gridOf(cat: Catalog, pieces: PlacedPiece[]): SampleGrid {
   const g = new SampleGrid(cat.params.trackWidth);
-  for (const p of pieces) for (const s of worldSamples(cat, p)) g.add(s);
+  for (const p of pieces) {
+    for (const s of worldSamples(cat, p)) g.add(s);
+    g.add(worldBlockers(cat, p));
+  }
   return g;
 }
 
@@ -546,26 +582,39 @@ function giveBack(st: DecorState, codes: string[]) {
 function addStation(cat: Catalog, st: DecorState, pools: Pools, rng: Rng, withStation: boolean): boolean {
   const need = withStation ? ['PR', 'LS', 'PL'] : ['PR', 'PL'];
   if (need.some((c) => !cat.has(c) || (st.avail[c] ?? 0) < 1)) return false;
+  // make the passing section long enough to hold a train clear of both switches:
+  // k extra straights on the main line between the switches, and k matching ones on the second lane
+  const S = cat.params.straight;
+  const base = withStation ? S : 0;
+  const k = Math.max(0, Math.ceil((cat.params.trainLength - base) / S));
+  const laneAvail = { ...st.avail };
+  const lane: string[] = [];
+  for (let i = 0; i < k; i++) {
+    const c = takeFrom(laneAvail, pools.straight);
+    if (!c) return false;
+    lane.push(c);
+  }
+  const width = need.length + k;
   for (const run of shuffle(rng, straightRuns(cat, st, pools))) {
-    if (run.length < need.length) continue;
-    const startIdx = randInt(rng, 0, run.length - need.length);
-    const uids = run.slice(startIdx, startIdx + need.length).map((i) => st.order[i]);
+    if (run.length < width) continue;
+    const startIdx = randInt(rng, 0, run.length - width);
+    const window = run.slice(startIdx, startIdx + width).map((i) => st.order[i]);
+    const firstUid = window[0];
+    const lastUid = window[width - 1];
+    const lsUid = withStation ? window[width - 2] : undefined;
     for (const mirrored of shuffle(rng, [false, true])) {
-      // right-hand lane: PR fwd, [LS fwd], PL rev. Left-hand: PL fwd, [LS rev], PR rev.
-      const plan = mirrored
-        ? [
-            ['PL', 'a'],
-            ...(withStation ? [['LS', 'b']] : []),
-            ['PR', 'b'],
-          ]
-        : [
-            ['PR', 'a'],
-            ...(withStation ? [['LS', 'a']] : []),
-            ['PL', 'b'],
-          ];
-      const freed = uids.map((u) => st.pieces.find((p) => p.uid === u)!.code);
-      const repl = plan.map(([code, inPort], i) => replaceInline(cat, st, uids[i], code, inPort));
-      if (!tryCommit(cat, st, withReplaced(st, repl))) continue;
+      // right-hand lane: PR fwd, straights, [LS fwd], PL rev. Left-hand: PL fwd, straights, [LS rev], PR rev.
+      const first = replaceInline(cat, st, firstUid, mirrored ? 'PL' : 'PR', 'a');
+      const last = replaceInline(cat, st, lastUid, mirrored ? 'PR' : 'PL', 'b');
+      const ls = lsUid ? replaceInline(cat, st, lsUid, 'LS', mirrored ? 'b' : 'a') : undefined;
+      const laneChain = placeChain(
+        cat,
+        piecePortPose(cat, first, 'c'),
+        lane.map((code) => ({ code, inPort: 'a', outPort: 'b' })),
+      ).pieces;
+      const freed = [firstUid, lastUid, ...(lsUid ? [lsUid] : [])].map((u) => st.pieces.find((p) => p.uid === u)!.code);
+      if (!tryCommit(cat, st, withReplaced(st, [first, last, ...(ls ? [ls] : [])], laneChain))) continue;
+      st.avail = laneAvail;
       giveBack(st, freed);
       need.forEach((c) => st.avail[c]--);
       st.features.push(withStation ? 'Loading station with two lanes' : 'Double-track passing section');
@@ -590,7 +639,7 @@ function addSiding(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): boolea
       for (const side of shuffle(rng, ['right', 'left'] as const)) {
         const codeA = side === 'right' ? right[0] : left[0];
         // trailing (entered at b) switch whose branch is on the same side must be the other hand
-        const codeB = side === 'right' ? left[0] : right.find((c) => c !== codeA) ?? right[0];
+        const codeB = side === 'right' ? left[0] : (right.find((c) => c !== codeA) ?? right[0]);
         if (!codeA || !codeB) continue;
         if (codeA === codeB && (st.avail[codeA] ?? 0) < 2) continue;
         const pA = replaceInline(cat, st, uA, codeA, 'a');
@@ -633,8 +682,9 @@ function addSpur(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): boolean 
           const avail = { ...st.avail, [freed]: (st.avail[freed] ?? 0) + 1 };
           avail[code]--;
           const branch = piecePortPose(cat, sw, 'c');
-          // a curve to straighten out, then up to two straights, then the buffer
-          for (const len of shuffle(rng, [1, 2, 0])) {
+          // enough straights to hold a train clear of the switch, then the buffer
+          const minLen = Math.ceil(cat.params.trainLength / cat.params.straight);
+          for (const len of [minLen, minLen + 1]) {
             const a2 = { ...avail };
             const steps: ChainStep[] = [];
             let ok = true;
@@ -659,29 +709,6 @@ function addSpur(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): boolean 
         }
       }
     }
-  }
-  return false;
-}
-
-function addBridge(cat: Catalog, st: DecorState): boolean {
-  // swap two consecutive raised straights for the self-supporting bridge
-  if (!cat.has('VB') || (st.avail.VB ?? 0) < 1) return false;
-  const byUid = new Map(st.pieces.map((p) => [p.uid, p]));
-  for (let i = 0; i + 1 < st.order.length; i++) {
-    const a = byUid.get(st.order[i]);
-    const b = byUid.get(st.order[i + 1]);
-    if (!a || !b) continue;
-    const isS = (p: PlacedPiece) => cat.get(p.code).category === 'straight';
-    if (!isS(a) || !isS(b) || a.z < 1 || b.z < 1) continue;
-    const vb = replaceInline(cat, st, a.uid, 'VB', 'a');
-    const next = st.pieces.filter((p) => p.uid !== b.uid).map((p) => (p.uid === a.uid ? vb : p));
-    if (!tryCommit(cat, st, next)) continue;
-    st.avail.VB--;
-    st.avail[a.code] = (st.avail[a.code] ?? 0) + 1;
-    st.avail[b.code] = (st.avail[b.code] ?? 0) + 1;
-    st.order = st.order.filter((u) => u !== b.uid);
-    st.features.push('Lift bridge on the raised section');
-    return true;
   }
   return false;
 }
@@ -733,23 +760,24 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
   const pools = piecePools(cat);
   const nCurves = poolCount(owned, pools.curve);
   const nStraight = poolCount(owned, pools.straight);
-  const nRamp = poolCount(owned, pools.ramp);
-  const angle = cat.params.curveAngle;
+  const rampsOwned = { 1: poolCount(owned, pools.rampByTurn[1]), [-1]: poolCount(owned, pools.rampByTurn[-1]) };
+  const nRamp = rampsOwned[1] + rampsOwned[-1];
+  const angle = cat.standardTurn();
   const perCircle = Math.round(360 / angle);
   const style = opts.style ?? 'any';
-  if (nCurves < perCircle - 2) return [];
-  const unit = cat.params.straight / 2;
-  const rampUnits = Math.round(cat.params.rampLength / unit);
+  // climbing pieces are curves too, so they count towards the turns of a loop
+  const nTurns = nCurves + nRamp;
+  if (nTurns < perCircle - 2) return [];
   const geom: LoopGeometry = {
     perCircle,
-    unit,
-    rampUnits: Math.abs(rampUnits * unit - cat.params.rampLength) < 0.5 ? rampUnits : 0,
+    unit: cat.params.straight / 2,
     radius: cat.params.curveRadius,
     angle,
     tolerance: Math.min(cat.params.joinTolerance * 0.75, 9),
+    maxLevel: 3,
   };
 
-  const words = closingWords(nCurves, angle, style !== 'loop').filter((w) => {
+  const words = closingWords(nTurns, angle, style !== 'loop').filter((w) => {
     const net = w.reduce((a, b) => a + b, 0);
     if (style === 'loop') return net !== 0;
     if (style === 'figure8') return net === 0;
@@ -766,15 +794,17 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
     const word = pick(rng, allWords);
     const net = word.reduce((a, b) => a + b, 0);
     // figure-8s need a raised crossing; loops get a hill sometimes when asked
-    const maxPairs = Math.floor(nRamp / 2);
+    const maxPairs = Math.min(Math.floor(nRamp / 2), 3);
     let pairs = 0;
     if (net === 0) {
       if (maxPairs < 1) continue;
-      pairs = randInt(rng, 1, Math.min(2, maxPairs));
+      pairs = randInt(rng, 1, maxPairs);
     } else if (opts.wantElevation !== false && maxPairs > 0 && rng() < 0.5) {
-      pairs = randInt(rng, 1, Math.min(2, maxPairs));
+      pairs = randInt(rng, 1, maxPairs);
     }
-    const plan = planLoop(rng, word, geom, { straight: nStraight, ramp: nRamp }, pairs);
+    // curves the word needs beyond the climbing ones must be plain curves
+    if (word.length - 2 * pairs > nCurves) continue;
+    const plan = planLoop(rng, word, geom, { straight: nStraight, rampsOwned }, pairs);
     if (!plan) continue;
     const built = buildLoop(cat, pools, plan, owned);
     if (!built) continue;
@@ -783,9 +813,8 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
 
     // decorate
     const avail: Counts = { ...owned };
-    for (const [c, n] of Object.entries(pieceCounts(built.pieces))) avail[c] -= n;
+    for (const [c, n] of Object.entries(pieceCounts(built.pieces, cat))) avail[c] -= n;
     const st: DecorState = { pieces: built.pieces, order: built.order, avail, features: [] };
-    if (pairs > 0) addBridge(cat, st);
     if (opts.wantStation !== false && rng() < 0.8) addStation(cat, st, pools, rng, true) || addStation(cat, st, pools, rng, false);
     if (opts.wantSidings !== false) {
       if (rng() < 0.6) addSiding(cat, st, pools, rng);
@@ -812,7 +841,7 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
     const s = scoreCandidate(cat, pieces, owned, st.features, word);
     if (!s.valid) continue;
     const maxZ = Math.max(0, ...pieces.map((p) => p.z + Math.max(...cat.get(p.code).ports.map((q) => q.z))));
-    const counts = pieceCounts(pieces);
+    const counts = pieceCounts(pieces, cat);
     const sig = `${canonical(word)}|${Object.entries(counts)
       .sort()
       .map(([k, v]) => `${k}${v}`)

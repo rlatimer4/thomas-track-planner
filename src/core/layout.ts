@@ -70,7 +70,10 @@ export function attachPose(cat: Catalog, target: Pose, code: string, portId: str
   if (!p) throw new Error(`Piece ${code} has no port ${portId}`);
   const rot = normDeg(target.dir + 180 - p.dir);
   const off = rotate(p, rot);
-  return { x: target.x - off.x, y: target.y - off.y, rot, z: target.z - p.z };
+  // free-standing pieces (bucket, lid on legs) always sit on the floor; if the end being
+  // joined is at another height the joint shows as a height mismatch instead
+  const z = t.body ? 0 : target.z - p.z;
+  return { x: target.x - off.x, y: target.y - off.y, rot, z };
 }
 
 export const portKey = (r: PortRef) => `${r.uid}:${r.port}`;
@@ -127,10 +130,22 @@ export function computeConnectivity(cat: Catalog, pieces: PlacedPiece[]): Connec
   return { links, open, ports };
 }
 
-export function pieceCounts(pieces: PlacedPiece[]): Counts {
+/** How many of each inventory item a set of pieces uses (alternate uses of one item share its code). */
+export function pieceCounts(pieces: PlacedPiece[], cat?: Catalog): Counts {
   const out: Counts = {};
-  for (const p of pieces) out[p.code] = (out[p.code] ?? 0) + 1;
+  for (const p of pieces) {
+    const code = cat && cat.has(p.code) ? cat.get(p.code).stockCode : p.code;
+    out[code] = (out[code] ?? 0) + 1;
+  }
   return out;
+}
+
+/** Points filling a piece's solid body (e.g. the bucket), in world coordinates. */
+export function worldBlockers(cat: Catalog, piece: PlacedPiece): Sample[] {
+  return cat.get(piece.code).blockers.map((s) => {
+    const w = applyTransform(piece, s);
+    return { x: w.x, y: w.y, z: s.z + piece.z };
+  });
 }
 
 /** Bounding box of all track centre-lines, padded by half the track width. */

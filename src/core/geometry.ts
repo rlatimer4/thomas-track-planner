@@ -118,8 +118,7 @@ export function walk(
     const n = Math.max(1, Math.ceil(len / step));
     for (let i = 1; i <= n; i++) {
       const frac = i / n;
-      const partial: TurtleOp =
-        op.kind === 'line' ? { kind: 'line', len: len * frac } : { kind: 'arc', r: op.r, turn: op.turn * frac };
+      const partial: TurtleOp = op.kind === 'line' ? { kind: 'line', len: len * frac } : { kind: 'arc', r: op.r, turn: op.turn * frac };
       const p = stepPose(pose, partial);
       samples.push({ x: p.x, y: p.y, z: zAt(travelled + len * frac) });
     }

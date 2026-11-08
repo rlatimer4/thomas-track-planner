@@ -6,6 +6,9 @@ import {
   dirVec,
   layoutBounds,
   layoutToSvg,
+  makeLayoutFile,
+  mergePieces,
+  parseLayoutFile,
   newLayout,
   placeAt,
   portKey,
@@ -34,14 +37,20 @@ interface View {
 const MAX_HISTORY = 200;
 
 export function Builder() {
-  const { catalog: cat, owned, currentLayout, saveLayout, update, layouts, units } = useStore();
-  const [pieces, setPiecesRaw] = useState<PlacedPiece[]>(currentLayout.pieces);
+  const { catalog: cat, owned, currentLayout, saveLayout, update, layouts, units, space, customPieces } = useStore();
+  // pieces whose definition is gone (e.g. a deleted custom piece) are left out rather than breaking the view
+  const [pieces, setPiecesRaw] = useState<PlacedPiece[]>(() => currentLayout.pieces.filter((p) => cat.has(p.code)));
   const [past, setPast] = useState<PlacedPiece[][]>([]);
   const [future, setFuture] = useState<PlacedPiece[][]>([]);
   const [sel, setSel] = useState<Selection>(null);
-  const [lastPlaced, setLastPlaced] = useState<{ uid: string; target: WorldPort | { x: number; y: number; dir: number; z: number }; inPort: string } | null>(null);
+  const [lastPlaced, setLastPlaced] = useState<{
+    uid: string;
+    target: WorldPort | { x: number; y: number; dir: number; z: number };
+    inPort: string;
+  } | null>(null);
   const [view, setView] = useState<View>({ tx: 300, ty: 250, s: 0.5 });
   const [labels, setLabels] = useState(true);
+  const [showFootprint, setShowFootprint] = useState(false);
   const [onlyOwned, setOnlyOwned] = useState(true);
   const [panel, setPanel] = useState<'issues' | 'parts' | null>(typeof window !== 'undefined' && window.innerWidth > 900 ? 'issues' : null);
   const [focusIssue, setFocusIssue] = useState<Issue | null>(null);
@@ -79,7 +88,7 @@ export function Builder() {
     setSel(null);
   };
 
-  const validation = useMemo(() => validateLayout(cat, pieces, { owned }), [cat, pieces, owned]);
+  const validation = useMemo(() => validateLayout(cat, pieces, { owned, space: space ?? undefined }), [cat, pieces, owned, space]);
   const openPorts = validation.conn.open;
   const problemUids = useMemo(() => {
     const s = new Set<string>();
@@ -178,7 +187,9 @@ export function Builder() {
     const pts = worldSamples(cat, selectedPiece).flat();
     const c = { x: pts.reduce((a, p) => a + p.x, 0) / pts.length, y: pts.reduce((a, p) => a + p.y, 0) / pts.length };
     const r = rotate({ x: selectedPiece.x - c.x, y: selectedPiece.y - c.y }, deg);
-    setPieces((ps) => ps.map((p) => (p.uid === selectedPiece.uid ? { ...p, x: c.x + r.x, y: c.y + r.y, rot: (p.rot + deg + 360) % 360 } : p)));
+    setPieces((ps) =>
+      ps.map((p) => (p.uid === selectedPiece.uid ? { ...p, x: c.x + r.x, y: c.y + r.y, rot: (p.rot + deg + 360) % 360 } : p)),
+    );
   };
 
   const raiseSelected = (dz: number) => {
@@ -335,7 +346,7 @@ export function Builder() {
   const exportJson = () =>
     saveTextFile(
       `${currentLayout.name.replace(/[^\w-]+/g, '_')}.track.json`,
-      JSON.stringify({ format: 'track-planner-layout', version: 1, layout: { ...currentLayout, pieces } }, null, 2),
+      JSON.stringify(makeLayoutFile({ ...currentLayout, pieces }, cat), null, 2),
       'Track layout',
       'json',
     );
@@ -344,13 +355,25 @@ export function Builder() {
     const text = await openTextFile('Track layout', 'json');
     if (!text) return;
     try {
-      const data = JSON.parse(text);
-      const l: Layout = data.layout ?? data;
-      if (!Array.isArray(l.pieces)) throw new Error('No pieces');
-      const unknown = l.pieces.filter((p) => !cat.has(p.code)).map((p) => p.code);
-      if (unknown.length) throw new Error(`Unknown piece codes: ${[...new Set(unknown)].join(', ')}`);
-      const imported: Layout = { ...newLayout(l.name ?? 'Imported layout'), pieces: l.pieces };
-      update((s) => ({ ...s, layouts: [...s.layouts, imported], currentLayoutId: imported.id }));
+      const file = parseLayoutFile(text);
+      // bring in any custom pieces the layout needs; existing pieces with the same code are kept
+      const builtins = new Set(
+        cat
+          .all()
+          .filter((t) => !t.custom)
+          .map((t) => t.code),
+      );
+      const merge = mergePieces(customPieces, file.pieces, builtins);
+      const known = new Set([...builtins, ...merge.merged.map((p) => p.code)]);
+      const unknown = [...new Set(file.layout.pieces.filter((p) => !known.has(p.code)).map((p) => p.code))];
+      if (unknown.length) throw new Error(`It uses pieces this app doesn't know: ${unknown.join(', ')}.`);
+      const imported: Layout = { ...newLayout(file.layout.name ?? 'Imported layout'), pieces: file.layout.pieces };
+      update((s) => ({ ...s, customPieces: merge.merged, layouts: [...s.layouts, imported], currentLayoutId: imported.id }));
+      const notes = [
+        merge.added.length ? `Added custom pieces: ${merge.added.join(', ')}.` : '',
+        merge.conflicts.length ? `Kept your own version of: ${merge.conflicts.join(', ')} (the file's version differs).` : '',
+      ].filter(Boolean);
+      if (notes.length) alert(notes.join('\n'));
     } catch (err) {
       alert(`Could not import: ${(err as Error).message}`);
     }
@@ -360,7 +383,7 @@ export function Builder() {
   const used = validation.counts;
   const palette = cat
     .trackPieces()
-    .filter((t) => !onlyOwned || (owned[t.code] ?? 0) > 0)
+    .filter((t) => !onlyOwned || (owned[t.stockCode] ?? 0) > 0)
     .sort((a, b) => a.category.localeCompare(b.category) || a.code.localeCompare(b.code));
   const sortedPieces = useMemo(() => [...pieces].sort((a, b) => a.z - b.z), [pieces]);
   const errors = validation.issues.filter((i) => i.severity === 'error').length;
@@ -379,22 +402,49 @@ export function Builder() {
           ))}
         </select>
         <input className="name" value={currentLayout.name} onChange={(e) => rename(e.target.value)} aria-label="Layout name" />
-        <button onClick={createLayout} title="New layout">New</button>
-        <button onClick={duplicateLayout} title="Duplicate layout">Copy</button>
-        <button onClick={deleteLayout} title="Delete layout">Delete</button>
+        <button onClick={createLayout} title="New layout">
+          New
+        </button>
+        <button onClick={duplicateLayout} title="Duplicate layout">
+          Copy
+        </button>
+        <button onClick={deleteLayout} title="Delete layout">
+          Delete
+        </button>
         <span className="sep" />
-        <button onClick={undo} disabled={!past.length} title="Undo (Ctrl+Z)">Undo</button>
-        <button onClick={redo} disabled={!future.length} title="Redo (Ctrl+Shift+Z)">Redo</button>
-        <button onClick={turnLast} disabled={!lastPlaced} title="Turn the last piece: left/right, or another switch leg (F)">Turn</button>
-        <button onClick={() => rotateSelected(45)} disabled={!selectedPiece} title="Rotate selected 45° (R)">Rotate</button>
-        <button onClick={() => raiseSelected(1)} disabled={!selectedPiece} title="Raise selected one level">Up</button>
-        <button onClick={() => raiseSelected(-1)} disabled={!selectedPiece} title="Lower selected one level">Down</button>
-        <button onClick={removeSelected} disabled={!selectedPiece && !lastPlaced} title="Delete selected (Del)">Remove</button>
-        <button onClick={clearAll} title="Remove all pieces">Clear</button>
+        <button onClick={undo} disabled={!past.length} title="Undo (Ctrl+Z)">
+          Undo
+        </button>
+        <button onClick={redo} disabled={!future.length} title="Redo (Ctrl+Shift+Z)">
+          Redo
+        </button>
+        <button onClick={turnLast} disabled={!lastPlaced} title="Turn the last piece: left/right, or another switch leg (F)">
+          Turn
+        </button>
+        <button onClick={() => rotateSelected(45)} disabled={!selectedPiece} title="Rotate selected 45° (R)">
+          Rotate
+        </button>
+        <button onClick={() => raiseSelected(1)} disabled={!selectedPiece} title="Raise selected one level">
+          Up
+        </button>
+        <button onClick={() => raiseSelected(-1)} disabled={!selectedPiece} title="Lower selected one level">
+          Down
+        </button>
+        <button onClick={removeSelected} disabled={!selectedPiece && !lastPlaced} title="Delete selected (Del)">
+          Remove
+        </button>
+        <button onClick={clearAll} title="Remove all pieces">
+          Clear
+        </button>
         <span className="sep" />
-        <button onClick={() => fit()} title="Zoom to fit">Fit</button>
+        <button onClick={() => fit()} title="Zoom to fit">
+          Fit
+        </button>
         <label className="check">
           <input type="checkbox" checked={labels} onChange={(e) => setLabels(e.target.checked)} /> Codes
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={showFootprint} onChange={(e) => setShowFootprint(e.target.checked)} /> Footprint
         </label>
         <span className="sep" />
         <button onClick={exportJson}>Export</button>
@@ -419,10 +469,15 @@ export function Builder() {
           </div>
           <div className="palette-list">
             {palette.map((t) => {
-              const have = owned[t.code] ?? 0;
-              const left = have - (used[t.code] ?? 0);
+              const have = owned[t.stockCode] ?? 0;
+              const left = have - (used[t.stockCode] ?? 0);
               return (
-                <button key={t.code} className={`palette-item ${left <= 0 ? 'none-left' : ''}`} onClick={() => place(t.code)} title={t.description}>
+                <button
+                  key={t.code}
+                  className={`palette-item ${left <= 0 ? 'none-left' : ''}`}
+                  onClick={() => place(t.code)}
+                  title={t.description}
+                >
                   <PieceIcon cat={cat} t={t} />
                   <span className="pi-code">{t.code}</span>
                   <span className="pi-name">{t.name}</span>
@@ -451,6 +506,7 @@ export function Builder() {
             </defs>
             <g transform={`translate(${view.tx} ${view.ty}) scale(${view.s})`}>
               <rect x={-20000} y={-20000} width={40000} height={40000} fill="url(#grid)" />
+              {showFootprint && pieces.length > 0 && <Footprint bounds={bounds} space={space} scale={view.s} units={units} />}
               {sortedPieces.map((p) => (
                 <TrackPiece
                   key={p.uid}
@@ -479,7 +535,14 @@ export function Builder() {
                   >
                     <circle cx={p.x} cy={p.y} r={r * 1.6} fill="transparent" />
                     <circle cx={p.x} cy={p.y} r={r} fill={isSel ? '#f59e0b' : '#22c55e'} stroke="#fff" strokeWidth={3 / view.s} />
-                    <line x1={p.x} y1={p.y} x2={p.x + d.x * r * 1.8} y2={p.y + d.y * r * 1.8} stroke={isSel ? '#f59e0b' : '#22c55e'} strokeWidth={5 / Math.max(view.s, 0.3)} />
+                    <line
+                      x1={p.x}
+                      y1={p.y}
+                      x2={p.x + d.x * r * 1.8}
+                      y2={p.y + d.y * r * 1.8}
+                      stroke={isSel ? '#f59e0b' : '#22c55e'}
+                      strokeWidth={5 / Math.max(view.s, 0.3)}
+                    />
                     {p.z !== 0 && (
                       <text x={p.x} y={p.y} className="port-z" fontSize={r * 1.1} textAnchor="middle" dominantBaseline="central">
                         {p.z}
@@ -488,7 +551,17 @@ export function Builder() {
                   </g>
                 );
               })}
-              {focusIssue?.at && <circle cx={focusIssue.at.x} cy={focusIssue.at.y} r={60} fill="none" stroke="#ef4444" strokeWidth={6} strokeDasharray="12 8" />}
+              {focusIssue?.at && (
+                <circle
+                  cx={focusIssue.at.x}
+                  cy={focusIssue.at.y}
+                  r={60}
+                  fill="none"
+                  stroke="#ef4444"
+                  strokeWidth={6}
+                  strokeDasharray="12 8"
+                />
+              )}
             </g>
           </svg>
           <div className="canvas-status">
@@ -499,9 +572,19 @@ export function Builder() {
               </span>
             )}
             <span className={errors ? 'bad' : warnings ? 'warn' : 'good'}>
-              {errors ? `${errors} error${errors > 1 ? 's' : ''}` : warnings ? `${warnings} warning${warnings > 1 ? 's' : ''}` : pieces.length ? 'All good' : ''}
+              {errors
+                ? `${errors} error${errors > 1 ? 's' : ''}`
+                : warnings
+                  ? `${warnings} warning${warnings > 1 ? 's' : ''}`
+                  : pieces.length
+                    ? 'All good'
+                    : ''}
             </span>
-            {validation.running.loopCount > 0 && <span>{validation.running.loopCount} loop{validation.running.loopCount > 1 ? 's' : ''}</span>}
+            {validation.running.loopCount > 0 && (
+              <span>
+                {validation.running.loopCount} loop{validation.running.loopCount > 1 ? 's' : ''}
+              </span>
+            )}
             <span className="legend">
               {[0, 1, 2, 3].map((z) => (
                 <span key={z}>
@@ -534,8 +617,81 @@ export function Builder() {
   );
 }
 
+/** Dashed outline of the area the layout covers, with its size, and the user's space for comparison. */
+function Footprint({
+  bounds: b,
+  space,
+  scale,
+  units,
+}: {
+  bounds: ReturnType<typeof layoutBounds>;
+  space: { width: number; depth: number } | null;
+  scale: number;
+  units: 'cm' | 'in';
+}) {
+  const fs = 15 / Math.max(scale, 0.05);
+  const gap = 30 / Math.max(scale, 0.05);
+  const sw = 2 / Math.max(scale, 0.05);
+  const fits = space && b.width <= space.width + 0.5 && b.height <= space.depth + 0.5;
+  const fitsRotated = space && b.height <= space.width + 0.5 && b.width <= space.depth + 0.5;
+  const spaceColor = fits ? '#16a34a' : fitsRotated ? '#d97706' : '#dc2626';
+  return (
+    <g className="footprint" pointerEvents="none">
+      {space && (
+        <>
+          <rect
+            x={b.minX}
+            y={b.minY}
+            width={space.width}
+            height={space.depth}
+            fill={spaceColor}
+            fillOpacity={0.05}
+            stroke={spaceColor}
+            strokeWidth={sw}
+            strokeDasharray={`${sw * 6} ${sw * 4}`}
+          />
+          <text x={b.minX + space.width} y={b.minY + space.depth + fs * 1.4} fontSize={fs} textAnchor="end" fill={spaceColor}>
+            Your space {fmtLen(space.width, units)} × {fmtLen(space.depth, units)}
+            {fits ? ' — fits' : fitsRotated ? ' — fits if turned 90°' : ' — too small'}
+          </text>
+        </>
+      )}
+      <rect x={b.minX} y={b.minY} width={b.width} height={b.height} fill="none" stroke="#0ea5e9" strokeWidth={sw} />
+      {/* width along the top */}
+      <line x1={b.minX} y1={b.minY - gap} x2={b.maxX} y2={b.minY - gap} stroke="#0ea5e9" strokeWidth={sw} />
+      <line x1={b.minX} y1={b.minY - gap * 1.4} x2={b.minX} y2={b.minY - gap * 0.6} stroke="#0ea5e9" strokeWidth={sw} />
+      <line x1={b.maxX} y1={b.minY - gap * 1.4} x2={b.maxX} y2={b.minY - gap * 0.6} stroke="#0ea5e9" strokeWidth={sw} />
+      <text x={(b.minX + b.maxX) / 2} y={b.minY - gap - fs * 0.4} fontSize={fs} textAnchor="middle" fill="#0369a1" fontWeight={700}>
+        {fmtLen(b.width, units)}
+      </text>
+      {/* depth along the left */}
+      <line x1={b.minX - gap} y1={b.minY} x2={b.minX - gap} y2={b.maxY} stroke="#0ea5e9" strokeWidth={sw} />
+      <line x1={b.minX - gap * 1.4} y1={b.minY} x2={b.minX - gap * 0.6} y2={b.minY} stroke="#0ea5e9" strokeWidth={sw} />
+      <line x1={b.minX - gap * 1.4} y1={b.maxY} x2={b.minX - gap * 0.6} y2={b.maxY} stroke="#0ea5e9" strokeWidth={sw} />
+      <text
+        x={b.minX - gap - fs * 0.4}
+        y={(b.minY + b.maxY) / 2}
+        fontSize={fs}
+        textAnchor="middle"
+        fill="#0369a1"
+        fontWeight={700}
+        transform={`rotate(-90 ${b.minX - gap - fs * 0.4} ${(b.minY + b.maxY) / 2})`}
+      >
+        {fmtLen(b.height, units)}
+      </text>
+    </g>
+  );
+}
+
 function PieceIcon({ cat, t }: { cat: ReturnType<typeof useStore>['catalog']; t: PieceType }) {
-  const piece: PlacedPiece = { uid: `icon-${t.code}`, code: t.code, x: 0, y: 0, rot: t.category === 'straight' || t.category === 'ramp' || t.category === 'bridge' ? 0 : 0, z: 0 };
+  const piece: PlacedPiece = {
+    uid: `icon-${t.code}`,
+    code: t.code,
+    x: 0,
+    y: 0,
+    rot: t.category === 'straight' || t.category === 'ramp' || t.category === 'bridge' ? 0 : 0,
+    z: 0,
+  };
   return (
     <span className="pi-icon">
       <LayoutPreview cat={cat} pieces={[piece]} size={40} />
@@ -544,7 +700,8 @@ function PieceIcon({ cat, t }: { cat: ReturnType<typeof useStore>['catalog']; t:
 }
 
 function IssueList({ issues, onFocus, focused }: { issues: Issue[]; onFocus: (i: Issue | null) => void; focused: Issue | null }) {
-  if (!issues.length) return <p className="muted">No problems found. Every end is connected, nothing overlaps, and you have enough pieces.</p>;
+  if (!issues.length)
+    return <p className="muted">No problems found. Every end is connected, nothing overlaps, and you have enough pieces.</p>;
   const order = { error: 0, warning: 1, info: 2 } as const;
   const sorted = [...issues].sort((a, b) => order[a.severity] - order[b.severity]);
   return (
@@ -617,9 +774,7 @@ function PartsList({
               .join(', ')}
             .
           </p>
-          {supportRows.length > 0 && (
-            <p className="muted">Uses: {supportRows.map(([c, n]) => `${n}× ${c}`).join(', ')}.</p>
-          )}
+          {supportRows.length > 0 && <p className="muted">Uses: {supportRows.map(([c, n]) => `${n}× ${c}`).join(', ')}.</p>}
         </>
       )}
     </div>

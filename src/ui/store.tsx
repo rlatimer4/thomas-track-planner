@@ -4,10 +4,12 @@ import {
   Catalog,
   DEFAULT_PARAMS,
   EMPTY_INVENTORY,
+  fromLegacyCustom,
+  isLegacyCustom,
   inventoryTotals,
   newLayout,
   type Counts,
-  type CustomPieceDef,
+  type PieceSpec,
   type GeometryParams,
   type Inventory,
   type Kit,
@@ -17,10 +19,17 @@ import { localStorageAdapter, type StorageAdapter } from './platform';
 
 export type Units = 'cm' | 'in';
 
+export interface Space {
+  width: number;
+  depth: number;
+}
+
 export interface PersistedState {
-  version: 1;
+  version: 2;
+  /** Floor/table space the layout should fit in, mm (null = not set). */
+  space: Space | null;
   params: GeometryParams;
-  customPieces: CustomPieceDef[];
+  customPieces: PieceSpec[];
   customKits: Kit[];
   inventory: Inventory;
   layouts: Layout[];
@@ -31,17 +40,25 @@ export interface PersistedState {
 const KEY = 'track-planner-state';
 
 function initialState(storage: StorageAdapter): PersistedState {
-  const saved = storage.load<PersistedState>(KEY);
-  if (saved && saved.version === 1) {
+  const saved = storage.load<Omit<PersistedState, 'version'> & { version: number }>(KEY);
+  if (saved && (saved.version === 1 || saved.version === 2)) {
+    // version 1 assumed one level of headroom; engines need two
+    const params = { ...DEFAULT_PARAMS, ...saved.params };
+    if (saved.version === 1) params.clearanceLevels = DEFAULT_PARAMS.clearanceLevels;
     return {
       ...saved,
-      params: { ...DEFAULT_PARAMS, ...saved.params },
+      version: 2,
+      space: saved.space ?? null,
+      params,
       layouts: saved.layouts?.length ? saved.layouts : [newLayout('My first layout')],
+      // custom pieces from before path-based definitions are converted
+      customPieces: (saved.customPieces ?? []).map((c) => (isLegacyCustom(c) ? fromLegacyCustom(c) : c)),
     };
   }
   const first = newLayout('My first layout');
   return {
-    version: 1,
+    version: 2,
+    space: null,
     params: DEFAULT_PARAMS,
     customPieces: [],
     customKits: [],

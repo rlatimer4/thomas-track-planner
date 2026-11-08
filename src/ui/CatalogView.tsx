@@ -1,13 +1,25 @@
 import { useState } from 'react';
-import { type CustomPieceDef, type PieceCategory } from '../core';
+import {
+  BUILTIN_KITS,
+  TRACK_STANDARD,
+  makePartsFile,
+  mergeKits,
+  mergePieces,
+  parsePartsFile,
+  type PieceCategory,
+  type PieceSpec,
+  type PieceType,
+} from '../core';
 import { useStore, fmtLen } from './store';
 import { LayoutPreview } from './TrackPieces';
+import { MeasuringGuide, PieceEditor } from './PieceEditor';
+import { openTextFile, saveTextFile } from './platform';
 
 const CATEGORY_LABEL: Record<PieceCategory, string> = {
   straight: 'Straights',
   curve: 'Curves',
-  switch: 'Switches',
-  ramp: 'Ramps',
+  switch: 'Switches and forks',
+  ramp: 'Climbing pieces',
   buffer: 'Buffers',
   crossing: 'Crossings',
   station: 'Stations',
@@ -15,26 +27,128 @@ const CATEGORY_LABEL: Record<PieceCategory, string> = {
   support: 'Supports',
 };
 
+/** The definition part of a resolved piece (what the editor and files work with). */
+export function specOf(t: PieceType): PieceSpec {
+  const {
+    ports: _p,
+    samples: _s,
+    blockers: _b,
+    stockCode: _st,
+    routes: _r,
+    routeLength: _rl,
+    bodyRect: _br,
+    isTrack: _i,
+    length: _l,
+    ...spec
+  } = t;
+  void [_p, _s, _b, _st, _r, _rl, _br, _i, _l];
+  return structuredClone(spec);
+}
+
+/** Short summary of how a piece changes the track: e.g. "a→b: straight ×1", "a→c: turns 60° right". */
+function describePaths(t: PieceType): string[] {
+  return (t.paths ?? []).map((p) => {
+    const parts: string[] = [];
+    if (p.turn)
+      parts.push(
+        `turns ${Math.abs(p.turn)}° ${p.turn > 0 ? 'right' : 'left'}${p.radius && p.radius !== 1 ? ` (radius ×${p.radius})` : ''}`,
+      );
+    else if (p.offset)
+      parts.push(`shifts ${Math.abs(p.offset)} lane${Math.abs(p.offset) !== 1 ? 's' : ''} ${p.offset > 0 ? 'right' : 'left'}`);
+    else parts.push(`straight ×${p.length ?? 1}`);
+    if (p.rise) parts.push(`climbs ${p.rise}`);
+    if (p.level) parts.push(`at level ${p.level}`);
+    return `${p.from}→${p.to ?? 'end'}: ${parts.join(', ')}`;
+  });
+}
+
 export function CatalogView() {
-  const { catalog: cat, owned, units, update } = useStore();
-  const [adding, setAdding] = useState(false);
-  const groups = new Map<PieceCategory, ReturnType<typeof cat.all>>();
+  const { catalog: cat, owned, units, update, customPieces, customKits } = useStore();
+  const [editor, setEditor] = useState<{ spec?: PieceSpec; editing?: boolean } | null>(null);
+  const [showStandard, setShowStandard] = useState(false);
+  const groups = new Map<PieceCategory, PieceType[]>();
   for (const t of cat.all()) (groups.get(t.category) ?? groups.set(t.category, []).get(t.category)!).push(t);
 
   const removeCustom = (code: string) => {
-    if (!confirm(`Delete custom piece ${code}? Layouts using it will no longer load it.`)) return;
+    if (!confirm(`Delete custom piece ${code}? Layouts that use it will no longer show it.`)) return;
     update((s) => ({ ...s, customPieces: s.customPieces.filter((c) => c.code !== code) }));
+  };
+  const duplicate = (t: PieceType) => {
+    const spec = specOf(t);
+    let code = `${t.code}-2`;
+    for (let i = 3; cat.has(code); i++) code = `${t.code}-${i}`;
+    setEditor({ spec: { ...spec, code, name: `${spec.name} (copy)`, custom: true, stock: undefined } });
+  };
+
+  const exportParts = () =>
+    saveTextFile('my-track-parts.trackparts.json', JSON.stringify(makePartsFile(customPieces, customKits), null, 2), 'Track parts', 'json');
+  const importParts = async () => {
+    const text = await openTextFile('Track parts', 'json');
+    if (!text) return;
+    try {
+      const file = parsePartsFile(text);
+      const builtins = new Set(
+        cat
+          .all()
+          .filter((t) => !t.custom)
+          .map((t) => t.code),
+      );
+      const builtinKits = new Set(BUILTIN_KITS.map((k) => k.id));
+      let pieces = mergePieces(customPieces, file.pieces, builtins);
+      let kits = mergeKits(customKits, file.kits, builtinKits);
+      const clashes = [...pieces.conflicts.filter((c) => !builtins.has(c)), ...kits.conflicts];
+      if (
+        clashes.length &&
+        confirm(`These already exist with different definitions: ${clashes.join(', ')}.\nReplace them with the file’s versions?`)
+      ) {
+        pieces = mergePieces(customPieces, file.pieces, builtins, true);
+        kits = mergeKits(customKits, file.kits, builtinKits, true);
+      }
+      update((s) => ({ ...s, customPieces: pieces.merged, customKits: kits.merged }));
+      const skippedBuiltin = pieces.conflicts.filter((c) => builtins.has(c));
+      alert(
+        [
+          `Added ${pieces.added.length} piece(s) and ${kits.added.length} kit(s).`,
+          skippedBuiltin.length ? `Skipped ${skippedBuiltin.join(', ')}: built-in codes can’t be replaced.` : '',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      );
+    } catch (err) {
+      alert(`Could not import: ${(err as Error).message}`);
+    }
   };
 
   return (
     <div className="page">
       <section>
-        <h2>Track catalog</h2>
+        <div className="page-head">
+          <h2>Track catalog</h2>
+          <div className="row wrap">
+            <button className="primary" onClick={() => setEditor({})}>
+              + New piece
+            </button>
+            <button
+              onClick={exportParts}
+              disabled={!customPieces.length && !customKits.length}
+              title="Save your custom pieces and kits to a file"
+            >
+              Export my pieces & kits
+            </button>
+            <button onClick={importParts} title="Load pieces and kits from a file">
+              Import pieces & kits
+            </button>
+          </div>
+        </div>
         <p className="muted">
-          Every piece the planner knows, with how it connects. Green dots are connectors, and arrows show which way each end faces. Any end
-          can join any other end at the same level: TrackMaster connectors are not male/female. Pieces marked <em>estimated</em> have
-          approximate geometry. You can calibrate sizes in Settings.
+          Every piece is described by its paths: how each way through it turns, shifts sideways, and climbs. Green dots are the ends; any
+          end joins any other end at the same level. Pieces marked <em>estimated</em> have approximate geometry.
         </p>
+        <button className="link" onClick={() => setShowStandard(!showStandard)}>
+          {showStandard ? 'Hide' : 'Show'} the track standard and how to measure pieces
+        </button>
+        {showStandard && <StandardPanel />}
+
         {[...groups.entries()].map(([cg, list]) => (
           <div key={cg}>
             <h3>{CATEGORY_LABEL[cg]}</h3>
@@ -56,105 +170,73 @@ export function CatalogView() {
                     {t.custom && <span className="badge custom">custom</span>}
                   </div>
                   <div className="muted small">{t.description}</div>
-                  <div className="small">
-                    {t.isTrack ? (
-                      <>
-                        {t.ports.length} end{t.ports.length > 1 ? 's' : ''}
-                        {t.length ? ` · ${fmtLen(t.length, units)} long` : ''}
-                        {t.ports.some((p) => p.z !== t.ports[0].z) && ` · climbs ${Math.max(...t.ports.map((p) => p.z)) - Math.min(...t.ports.map((p) => p.z))} level`}
-                      </>
-                    ) : t.category === 'support' && t.supportLevel ? (
-                      <>Holds track at level {t.supportLevel}</>
-                    ) : (
-                      <>Support part</>
-                    )}
-                    {' · '}you own {owned[t.code] ?? 0}
-                  </div>
-                  {t.custom && (
-                    <button className="link danger" onClick={() => removeCustom(t.code)}>
-                      Delete
-                    </button>
+                  {t.isTrack && (
+                    <ul className="path-summary small">
+                      {describePaths(t).map((d) => (
+                        <li key={d}>{d}</li>
+                      ))}
+                    </ul>
                   )}
+                  <div className="small">
+                    {t.isTrack
+                      ? `${t.ports.length} end${t.ports.length > 1 ? 's' : ''}${t.length ? ` · ${fmtLen(t.length, units)} long` : ''}`
+                      : t.category === 'support' && t.supportLevel
+                        ? `Holds track at level ${t.supportLevel}${t.jointsHeld ? `, ${t.jointsHeld} joints` : ''}`
+                        : 'Support part'}
+                    {' · '}you own {owned[t.stockCode] ?? 0}
+                  </div>
+                  <div className="row card-actions">
+                    {t.custom ? (
+                      <>
+                        <button className="link" onClick={() => setEditor({ spec: specOf(t), editing: true })}>
+                          Edit
+                        </button>
+                        <button className="link" onClick={() => duplicate(t)}>
+                          Duplicate
+                        </button>
+                        <button className="link danger" onClick={() => removeCustom(t.code)}>
+                          Delete
+                        </button>
+                      </>
+                    ) : (
+                      <button className="link" onClick={() => duplicate(t)} title="Make an editable copy of this piece">
+                        Copy as custom
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
           </div>
         ))}
-        {adding ? <PieceEditor onDone={() => setAdding(false)} /> : <button onClick={() => setAdding(true)}>+ Add a custom piece</button>}
       </section>
+      {editor && <PieceEditor initial={editor.spec} editing={editor.editing} onDone={() => setEditor(null)} />}
     </div>
   );
 }
 
-function PieceEditor({ onDone }: { onDone: () => void }) {
-  const { catalog: cat, update, units } = useStore();
-  const p = cat.params;
-  const toUnit = (mm: number) => +(units === 'cm' ? mm / 10 : mm / 25.4).toFixed(1);
-  const fromUnit = (v: number) => (units === 'cm' ? v * 10 : v * 25.4);
-  const [d, setD] = useState<CustomPieceDef>({ code: '', name: '', kind: 'straight', length: p.straight, radius: p.curveRadius, angle: p.curveAngle, hand: 'right', levels: 1 });
-  const save = () => {
-    const code = d.code.trim().toUpperCase();
-    if (!code || !d.name.trim()) return alert('Code and name are required.');
-    if (cat.has(code)) return alert('That code is already used.');
-    update((s) => ({ ...s, customPieces: [...s.customPieces, { ...d, code, name: d.name.trim() }] }));
-    onDone();
-  };
+function StandardPanel() {
+  const { params, units } = useStore();
   return (
-    <div className="card editor">
-      <h3>New custom piece</h3>
-      <label>
-        Code <input value={d.code} onChange={(e) => setD({ ...d, code: e.target.value })} placeholder="e.g. S2" />
-      </label>
-      <label>
-        Name <input value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} placeholder="e.g. Half straight" />
-      </label>
-      <label>
-        Kind
-        <select value={d.kind} onChange={(e) => setD({ ...d, kind: e.target.value as CustomPieceDef['kind'] })}>
-          <option value="straight">Straight</option>
-          <option value="curve">Curve</option>
-          <option value="switch">Switch</option>
-          <option value="ramp">Ramp</option>
-          <option value="buffer">Buffer stop</option>
-          <option value="support">Support</option>
-        </select>
-      </label>
-      {['straight', 'ramp', 'switch'].includes(d.kind) && (
-        <label>
-          Length ({units}) <input type="number" step="0.1" value={toUnit(d.length!)} onChange={(e) => setD({ ...d, length: fromUnit(+e.target.value) })} />
-        </label>
-      )}
-      {['curve', 'switch'].includes(d.kind) && (
-        <>
-          <label>
-            Radius ({units}) <input type="number" step="0.1" value={toUnit(d.radius!)} onChange={(e) => setD({ ...d, radius: fromUnit(+e.target.value) })} />
-          </label>
-          <label>
-            Angle (°) <input type="number" value={d.angle} onChange={(e) => setD({ ...d, angle: +e.target.value })} />
-          </label>
-        </>
-      )}
-      {d.kind === 'switch' && (
-        <label>
-          Branch
-          <select value={d.hand} onChange={(e) => setD({ ...d, hand: e.target.value as 'left' | 'right' })}>
-            <option value="right">Right</option>
-            <option value="left">Left</option>
-          </select>
-        </label>
-      )}
-      {(d.kind === 'ramp' || d.kind === 'support') && (
-        <label>
-          {d.kind === 'ramp' ? 'Levels climbed' : 'Holds at level'}{' '}
-          <input type="number" min={1} max={4} value={d.levels} onChange={(e) => setD({ ...d, levels: +e.target.value })} />
-        </label>
-      )}
-      <div className="row">
-        <button className="primary" onClick={save}>
-          Add piece
-        </button>
-        <button onClick={onDone}>Cancel</button>
-      </div>
+    <div className="card standard">
+      <h4>Track standard</h4>
+      <ul className="small">
+        <li>
+          Curves turn {TRACK_STANDARD.curveAngle}°, so {TRACK_STANDARD.curvesPerCircle} make a circle. A switch branch is one standard
+          curve.
+        </li>
+        <li>Offset switches (PR/PL) shift the track {TRACK_STANDARD.offsetLanes} lane sideways and end parallel.</li>
+        <li>
+          Climbing pieces rise {TRACK_STANDARD.climbPerPiece} level each. Engines need {params.clearanceLevels} levels of headroom.
+        </li>
+        <li>Turns and offsets are positive to the right of the direction of travel, negative to the left.</li>
+        <li>
+          Units (calibrate in Settings): S = {fmtLen(params.straight, units)} (one straight), R = {fmtLen(params.curveRadius, units)} (curve
+          radius), lane = {fmtLen(params.parallelSpacing, units)}.
+        </li>
+      </ul>
+      <h4>Measuring a piece</h4>
+      <MeasuringGuide />
     </div>
   );
 }

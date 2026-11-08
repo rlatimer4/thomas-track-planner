@@ -16,11 +16,12 @@ const PRINCIPLES = [
 ];
 
 export function AutoView({ onOpen }: { onOpen: () => void }) {
-  const { catalog: cat, params, customPieces, owned, units, update } = useStore();
+  const { catalog: cat, params, customPieces, owned, units, update, space } = useStore();
   const [style, setStyle] = useState<LayoutStyle>('any');
-  const [limit, setLimit] = useState(false);
-  const [w, setW] = useState(units === 'cm' ? 200 : 78);
-  const [d, setD] = useState(units === 'cm' ? 150 : 60);
+  const toUnits = (mm: number) => Math.round(units === 'cm' ? mm / 10 : mm / 25.4);
+  const [limit, setLimit] = useState(!!space);
+  const [w, setW] = useState(space ? toUnits(space.width) : units === 'cm' ? 200 : 78);
+  const [d, setD] = useState(space ? toUnits(space.depth) : units === 'cm' ? 150 : 60);
   const [sidings, setSidings] = useState(true);
   const [elevation, setElevation] = useState(true);
   const [station, setStation] = useState(true);
@@ -116,8 +117,8 @@ export function AutoView({ onOpen }: { onOpen: () => void }) {
         {error && <p className="bad">Error: {error}</p>}
         {results && results.length === 0 && (
           <p className="warn">
-            No layout could be built. A loop needs at least 8 curves (or 6 plus straights), and more straights and curves allow more
-            shapes. Try removing the space limit or adding pieces.
+            No layout could be built. A loop needs at least 8 curves (or 6 plus straights), and more straights and curves allow more shapes.
+            Try removing the space limit or adding pieces.
           </p>
         )}
         {results && results.length > 0 && (
@@ -127,7 +128,12 @@ export function AutoView({ onOpen }: { onOpen: () => void }) {
                 <LayoutPreview cat={cat} pieces={c.pieces} size={220} />
                 <div className="result-head">
                   <strong>{c.name}</strong>
-                  <span className="score" title={Object.entries(c.breakdown).map(([k, v]) => `${k}: ${v > 0 ? '+' : ''}${v}`).join('\n')}>
+                  <span
+                    className="score"
+                    title={Object.entries(c.breakdown)
+                      .map(([k, v]) => `${k}: ${v > 0 ? '+' : ''}${v}`)
+                      .join('\n')}
+                  >
                     {Math.round(c.score)} pts
                   </span>
                 </div>
