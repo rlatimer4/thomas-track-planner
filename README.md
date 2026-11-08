@@ -21,11 +21,27 @@ the design logic has no platform dependencies, so the same code can later ship a
 | **Auto design** | Choose a shape (any, loops only, figure-8), the features you want (sidings, station, hills) and, optionally, the space you have. It generates and ranks layouts. Hover the score to see how it was worked out. **Open in builder** to edit one. |
 | **My track** | Set how many of each kit you own, or adjust loose pieces with + / − (negative numbers record lost pieces). You can also define your own kits. |
 | **Catalog** | Every piece with its connectors, size and description. You can add custom pieces (straight, curve, switch, ramp, buffer, support). |
-| **Settings** | Units (cm/in) and track geometry calibration. |
+| **Settings** | Units (cm/in); your space; trains (engines running at once, longest train, engine width, headroom, how switches behave); track geometry calibration. |
 
-The **Checks** panel lists problems live: overlaps, height mismatches, open ends, ends that almost meet, pieces you don't have
-enough of, raised joints without supports, S-bends, switches on ramps, long climbs and dead-end sections. **Parts** shows a bill of
-materials, including the supports needed for raised track.
+The **Checks** panel updates as you build. Hover or tap a check to highlight the pieces involved.
+
+| Check | What it looks for |
+| --- | --- |
+| Overlap, height mismatch, ends almost meet, open ends | Pieces in the same space, joints at different heights, forced joints, track that runs off the end |
+| Headroom | Track passing over other track less than 2 levels above it (engines need 2; adjustable) |
+| Tracks too close | Tracks at the same level nearer than an engine is wide, so trains would scrape |
+| Disconnected track | Pieces not joined to the rest of the layout |
+| Turning trains | Whether an engine can turn around (reversing loop, wye), and which track does it |
+| Unreachable track, loop reachable one way only | Track a train on the main line can't get to, usually a switch facing the wrong way, and loops that can only be entered in one direction |
+| Junctions and crossings, head-on risk, too many engines | Where trains' paths meet; turning trains running into others; more engines than places to pass or wait |
+| Siding too short, passing loop too short | Sidings and passing loops that can't hold your longest train clear of the switches |
+| Stop on a slope, stop close to a junction | Stop pieces (CS2, Brendam Docks, station) on or next to a ramp, or where a waiting train blocks a junction |
+| Switches that must be set | Only if engines derail when going through a switch set against them (Settings) |
+| Doesn't fit your space | The layout is bigger than the space set in Settings (it says if turning it 90° would fit) |
+| Shortages, supports, S-bends, switches on ramps, long climbs, dead-end sections | Pieces and supports you don't have, and track design rules |
+
+**Parts** shows a bill of materials, including the supports needed for raised track. **Footprint** draws the area the layout
+covers with its width and depth, next to your space if you've set one. The exported SVG includes the footprint too.
 
 Layouts and inventory are saved automatically on the device. **Export/Import** moves layouts as `.track.json` files, and **SVG**
 saves a printable drawing.
@@ -58,7 +74,7 @@ Height is counted in **levels**. Ground is level 0, and each support height is o
 
 How it's checked:
 - Joints connect only at the same level; otherwise it's a **height mismatch**.
-- Track may cross over other track that's at least one level lower (configurable). The bucket is solid, so track can't pass
+- Track may cross over other track that's at least two levels lower, which is the headroom an engine needs (configurable). The bucket is solid, so track can't pass
   through its sides at any height below its top.
 - Every raised joint needs supports stacked to its height unless a self-supporting piece (`AR1`'s top, the bridge, the lid,
   the bucket) holds it. For each joint the planner picks the combination using the fewest pieces you own: an `RR1` pier (level 1 only),

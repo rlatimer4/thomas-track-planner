@@ -573,18 +573,39 @@ function giveBack(st: DecorState, codes: string[]) {
 function addStation(cat: Catalog, st: DecorState, pools: Pools, rng: Rng, withStation: boolean): boolean {
   const need = withStation ? ['PR', 'LS', 'PL'] : ['PR', 'PL'];
   if (need.some((c) => !cat.has(c) || (st.avail[c] ?? 0) < 1)) return false;
+  // make the passing section long enough to hold a train clear of both switches:
+  // k extra straights on the main line between the switches, and k matching ones on the second lane
+  const S = cat.params.straight;
+  const base = withStation ? S : 0;
+  const k = Math.max(0, Math.ceil((cat.params.trainLength - base) / S));
+  const laneAvail = { ...st.avail };
+  const lane: string[] = [];
+  for (let i = 0; i < k; i++) {
+    const c = takeFrom(laneAvail, pools.straight);
+    if (!c) return false;
+    lane.push(c);
+  }
+  const width = need.length + k;
   for (const run of shuffle(rng, straightRuns(cat, st, pools))) {
-    if (run.length < need.length) continue;
-    const startIdx = randInt(rng, 0, run.length - need.length);
-    const uids = run.slice(startIdx, startIdx + need.length).map((i) => st.order[i]);
+    if (run.length < width) continue;
+    const startIdx = randInt(rng, 0, run.length - width);
+    const window = run.slice(startIdx, startIdx + width).map((i) => st.order[i]);
+    const firstUid = window[0];
+    const lastUid = window[width - 1];
+    const lsUid = withStation ? window[width - 2] : undefined;
     for (const mirrored of shuffle(rng, [false, true])) {
-      // right-hand lane: PR fwd, [LS fwd], PL rev. Left-hand: PL fwd, [LS rev], PR rev.
-      const plan = mirrored
-        ? [['PL', 'a'], ...(withStation ? [['LS', 'b']] : []), ['PR', 'b']]
-        : [['PR', 'a'], ...(withStation ? [['LS', 'a']] : []), ['PL', 'b']];
-      const freed = uids.map((u) => st.pieces.find((p) => p.uid === u)!.code);
-      const repl = plan.map(([code, inPort], i) => replaceInline(cat, st, uids[i], code, inPort));
-      if (!tryCommit(cat, st, withReplaced(st, repl))) continue;
+      // right-hand lane: PR fwd, straights, [LS fwd], PL rev. Left-hand: PL fwd, straights, [LS rev], PR rev.
+      const first = replaceInline(cat, st, firstUid, mirrored ? 'PL' : 'PR', 'a');
+      const last = replaceInline(cat, st, lastUid, mirrored ? 'PR' : 'PL', 'b');
+      const ls = lsUid ? replaceInline(cat, st, lsUid, 'LS', mirrored ? 'b' : 'a') : undefined;
+      const laneChain = placeChain(
+        cat,
+        piecePortPose(cat, first, 'c'),
+        lane.map((code) => ({ code, inPort: 'a', outPort: 'b' })),
+      ).pieces;
+      const freed = [firstUid, lastUid, ...(lsUid ? [lsUid] : [])].map((u) => st.pieces.find((p) => p.uid === u)!.code);
+      if (!tryCommit(cat, st, withReplaced(st, [first, last, ...(ls ? [ls] : [])], laneChain))) continue;
+      st.avail = laneAvail;
       giveBack(st, freed);
       need.forEach((c) => st.avail[c]--);
       st.features.push(withStation ? 'Loading station with two lanes' : 'Double-track passing section');
@@ -652,8 +673,9 @@ function addSpur(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): boolean 
           const avail = { ...st.avail, [freed]: (st.avail[freed] ?? 0) + 1 };
           avail[code]--;
           const branch = piecePortPose(cat, sw, 'c');
-          // a curve to straighten out, then up to two straights, then the buffer
-          for (const len of shuffle(rng, [1, 2, 0])) {
+          // enough straights to hold a train clear of the switch, then the buffer
+          const minLen = Math.ceil(cat.params.trainLength / cat.params.straight);
+          for (const len of [minLen, minLen + 1]) {
             const a2 = { ...avail };
             const steps: ChainStep[] = [];
             let ok = true;

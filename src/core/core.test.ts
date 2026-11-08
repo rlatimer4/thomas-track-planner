@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   BUILTIN_KITS,
+  DEFAULT_PARAMS,
+  operationalChecks,
+  type Connectivity,
+  type PlacedPiece,
   angleDiff,
   Catalog,
   analyzeRunning,
@@ -72,7 +76,8 @@ describe('placement', () => {
 
 describe('validation', () => {
   it('a closed oval has no open ends or overlaps', () => {
-    const v = validateLayout(cat, oval());
+    const one = new Catalog({ ...DEFAULT_PARAMS, engineCount: 1 });
+    const v = validateLayout(one, oval());
     expect(v.issues.filter((i) => i.severity !== 'info')).toEqual([]);
     expect(v.running.onCycle.size).toBeGreaterThan(0);
     expect(v.running.loopCount).toBe(1);
@@ -92,11 +97,14 @@ describe('validation', () => {
     expect(v.issues.some((i) => i.rule === 'overlap')).toBe(true);
   });
 
-  it('allows a raised crossing', () => {
+  it('allows a raised crossing with two levels of headroom', () => {
     const a = placeChain(cat, startPose(), [S]).pieces;
-    const b = placeChain(cat, startPose(100, -100, 90, 1), [S]).pieces.map((p) => ({ ...p, uid: 'other' }));
-    const v = validateLayout(cat, [...a, ...b]);
-    expect(v.issues.some((i) => i.rule === 'overlap')).toBe(false);
+    const over = (level: number) => placeChain(cat, startPose(100, -100, 90, level), [S]).pieces.map((p) => ({ ...p, uid: 'other' }));
+    const two = validateLayout(cat, [...a, ...over(2)]);
+    expect(two.issues.some((i) => i.rule === 'overlap' || i.rule === 'headroom')).toBe(false);
+    const one = validateLayout(cat, [...a, ...over(1)]);
+    expect(one.issues.some((i) => i.rule === 'overlap')).toBe(false);
+    expect(one.issues.some((i) => i.rule === 'headroom')).toBe(true);
   });
 
   it('flags shortages against inventory', () => {
@@ -235,6 +243,162 @@ describe('elevation', () => {
     expect(plan(2, { S1: 1, RR1: 4 }).unsupported).toEqual({ 2: 2 });
     // not tall enough
     expect(plan(4, { S1: 1, RS3: 4, D1: 2 }).unsupported).toEqual({ 4: 2 });
+  });
+});
+
+/** Wire pieces together by hand (geometry ignored) to test running logic. */
+function wired(codes: Record<string, string>, joins: [string, string][]): { pieces: PlacedPiece[]; conn: Connectivity } {
+  const pieces = Object.entries(codes).map(([uid, code]) => ({ uid, code, x: 0, y: 0, rot: 0, z: 0 }));
+  const links = new Map<string, { uid: string; port: string }>();
+  for (const [a, b] of joins) {
+    const [ua, pa] = a.split('.');
+    const [ub, pb] = b.split('.');
+    links.set(`${ua}:${pa}`, { uid: ub, port: pb });
+    links.set(`${ub}:${pb}`, { uid: ua, port: pa });
+  }
+  return { pieces, conn: { links, open: [], ports: [] } };
+}
+const rules = (cat2: Catalog, w: ReturnType<typeof wired>) => operationalChecks(cat2, w.pieces, w.conn);
+const catWith = (over: Partial<typeof DEFAULT_PARAMS>) => new Catalog({ ...DEFAULT_PARAMS, ...over });
+
+// an oval: ring of four straights
+const ring = (ids: string[]) => ids.map((id, i) => [`${id}.b`, `${ids[(i + 1) % ids.length]}.a`] as [string, string]);
+
+describe('operating checks', () => {
+  it('1. trains on an oval can’t turn around; a dogbone with two balloons can', () => {
+    const oval1 = wired({ a: 'S1', b: 'S1', c: 'S1', d: 'S1' }, ring(['a', 'b', 'c', 'd']));
+    const r1 = rules(cat, oval1).find((i) => i.rule === 'direction-change')!;
+    expect(r1.message).toMatch(/can’t turn around/);
+    // stem s between switches w1 and w2, each with a balloon (x1, x2)
+    const dogbone = wired({ s: 'S1', w1: 'TR', w2: 'TR', x1: 'C', x2: 'C' }, [
+      ['w1.a', 's.a'],
+      ['s.b', 'w2.a'],
+      ['w1.b', 'x1.a'],
+      ['x1.b', 'w1.c'],
+      ['w2.b', 'x2.a'],
+      ['x2.b', 'w2.c'],
+    ]);
+    const r2 = rules(cat, dogbone).find((i) => i.rule === 'direction-change')!;
+    expect(r2.message).toMatch(/can turn around/);
+    expect(r2.uids).toContain('s');
+    // with two engines, turning trains can meet head-on
+    expect(rules(cat, dogbone).some((i) => i.rule === 'head-on')).toBe(true);
+  });
+
+  it('2. a switch facing the wrong way leaves track unreachable', () => {
+    // oval with switch w on it; spur: w.c -> t -> w2.b, w2.a -> buffer z1; w2.c -> p -> buffer z2
+    // trains reach z1 through w2 (trailing), but p is only reachable by reversing at z1
+    const w = wired({ a: 'S1', b: 'S1', c: 'S1', w: 'TR', t: 'S1', w2: 'TL', z1: 'BS1', p: 'S1', z2: 'BS1' }, [
+      ...ring(['a', 'b', 'c']).slice(0, 2),
+      ['c.b', 'w.a'],
+      ['w.b', 'a.a'],
+      ['w.c', 't.a'],
+      ['t.b', 'w2.b'],
+      ['w2.a', 'z1.a'],
+      ['w2.c', 'p.a'],
+      ['p.b', 'z2.a'],
+    ]);
+    const u = rules(cat, w).find((i) => i.rule === 'unreachable');
+    expect(u?.uids.sort()).toEqual(['p', 'z2']);
+  });
+
+  it('3. junctions are flagged as conflict points with two engines, not with one', () => {
+    const passing = wired({ a: 'S1', b: 'S1', c: 'S1', w1: 'TR', w2: 'TL', m1: 'S1', m2: 'S1', l1: 'S1', l2: 'S1' }, [
+      ['a.b', 'b.a'],
+      ['b.b', 'c.a'],
+      ['c.b', 'w1.a'],
+      ['w1.b', 'm1.a'],
+      ['m1.b', 'm2.a'],
+      ['m2.b', 'w2.b'],
+      ['w1.c', 'l1.a'],
+      ['l1.b', 'l2.a'],
+      ['l2.b', 'w2.c'],
+      ['w2.a', 'a.a'],
+    ]);
+    const two = rules(cat, passing);
+    expect(two.find((i) => i.rule === 'conflict-points')?.uids.sort()).toEqual(['w1', 'w2']);
+    // a long enough passing loop gives the second engine somewhere to wait
+    expect(two.some((i) => i.rule === 'capacity')).toBe(false);
+    expect(rules(catWith({ engineCount: 1 }), passing).some((i) => i.rule === 'conflict-points')).toBe(false);
+    // a plain oval has nowhere to pass
+    const oval1 = wired({ a: 'S1', b: 'S1', c: 'S1', d: 'S1' }, ring(['a', 'b', 'c', 'd']));
+    expect(rules(cat, oval1).some((i) => i.rule === 'capacity')).toBe(true);
+  });
+
+  it('4. sidings and passing loops must hold a train', () => {
+    const siding = (n: number) => {
+      const codes: Record<string, string> = { a: 'S1', b: 'S1', c: 'S1', w: 'TR', z: 'BS1' };
+      const joins: [string, string][] = [...ring(['a', 'b', 'c']).slice(0, 2), ['c.b', 'w.a'], ['w.b', 'a.a']];
+      let prev = 'w.c';
+      for (let i = 0; i < n; i++) {
+        codes[`s${i}`] = 'S1';
+        joins.push([prev, `s${i}.a`]);
+        prev = `s${i}.b`;
+      }
+      joins.push([prev, 'z.a']);
+      return wired(codes, joins);
+    };
+    expect(rules(cat, siding(1)).some((i) => i.rule === 'short-siding')).toBe(true); // 21 cm < 25 cm
+    expect(rules(cat, siding(2)).some((i) => i.rule === 'short-siding')).toBe(false);
+    // offset switches back to back: a passing place with no room at all
+    const mini = wired({ a: 'S1', b: 'S1', c: 'S1', pr: 'PR', pl: 'PL' }, [
+      ['a.b', 'b.a'],
+      ['b.b', 'c.a'],
+      ['c.b', 'pr.a'],
+      ['pr.b', 'pl.b'],
+      ['pr.c', 'pl.c'],
+      ['pl.a', 'a.a'],
+    ]);
+    expect(rules(cat, mini).some((i) => i.rule === 'short-passing-loop')).toBe(true);
+  });
+
+  it('5. stop pieces on a ramp or next to a junction are flagged', () => {
+    const onRamp = wired({ r: 'AL', s: 'CS2', t: 'S1' }, [
+      ['r.b', 's.a'],
+      ['s.b', 't.a'],
+    ]);
+    expect(rules(cat, onRamp).some((i) => i.rule === 'stop-on-grade')).toBe(true);
+    const byJunction = wired({ a: 'S1', b: 'S1', w: 'TR', s: 'CS2' }, [
+      ['a.b', 'b.a'],
+      ['b.b', 'w.a'],
+      ['w.b', 's.a'],
+      ['s.b', 'a.a'],
+    ]);
+    expect(rules(cat, byJunction).some((i) => i.rule === 'stop-near-junction')).toBe(true);
+  });
+
+  it('6. parallel tracks closer than an engine is wide are flagged', () => {
+    const a = placeChain(cat, startPose(), [S]).pieces;
+    const near = placeChain(cat, startPose(0, 50), [S]).pieces;
+    const far = placeChain(cat, startPose(0, 80), [S]).pieces;
+    expect(validateLayout(cat, [...a, ...near]).issues.some((i) => i.rule === 'too-close')).toBe(true);
+    expect(validateLayout(cat, [...a, ...far]).issues.some((i) => i.rule === 'too-close')).toBe(false);
+  });
+
+  it('8. pieces not joined to the main layout are flagged', () => {
+    const w = wired({ a: 'S1', b: 'S1', c: 'S1', d: 'S1', lone: 'S1' }, ring(['a', 'b', 'c', 'd']));
+    expect(rules(cat, w).find((i) => i.rule === 'disconnected')?.uids).toEqual(['lone']);
+  });
+
+  it('switches that must be set are flagged when trailing derails', () => {
+    const passing = wired({ a: 'S1', w1: 'TR', w2: 'TL', l1: 'S1', l2: 'S1', m: 'S1' }, [
+      ['a.b', 'w1.a'],
+      ['w1.b', 'm.a'],
+      ['m.b', 'w2.b'],
+      ['w1.c', 'l1.a'],
+      ['l1.b', 'l2.a'],
+      ['l2.b', 'w2.c'],
+      ['w2.a', 'a.a'],
+    ]);
+    expect(rules(cat, passing).some((i) => i.rule === 'trailing-switch')).toBe(false);
+    expect(rules(catWith({ trailingPushThrough: 0 }), passing).some((i) => i.rule === 'trailing-switch')).toBe(true);
+  });
+
+  it('footprint is checked against the space', () => {
+    const v = validateLayout(cat, oval(), { space: { width: 500, depth: 900 } });
+    const f = v.issues.find((i) => i.rule === 'footprint');
+    expect(f?.message).toMatch(/turn it 90°/);
+    expect(validateLayout(cat, oval(), { space: { width: 2000, depth: 2000 } }).issues.some((i) => i.rule === 'footprint')).toBe(false);
   });
 });
 

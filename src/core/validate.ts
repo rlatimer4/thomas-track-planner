@@ -1,7 +1,17 @@
 import { angleDiff, dist, type Vec } from './geometry';
 import type { Catalog } from './catalog';
 import { shortages, type Counts } from './inventory';
-import { computeConnectivity, pieceCounts, portKey, worldBlockers, worldSamples, type Connectivity, type PlacedPiece } from './layout';
+import {
+  computeConnectivity,
+  layoutBounds,
+  pieceCounts,
+  portKey,
+  worldBlockers,
+  worldSamples,
+  type Connectivity,
+  type PlacedPiece,
+} from './layout';
+import { operationalChecks } from './operations';
 import { analyzeRunning, turnThrough, type RunAnalysis } from './graph';
 
 export type Severity = 'error' | 'warning' | 'info';
@@ -33,6 +43,39 @@ export interface ValidationResult {
 
 export const RULES: Record<string, { title: string; why: string }> = {
   overlap: { title: 'Overlapping track', why: 'Two pieces occupy the same space at the same height.' },
+  headroom: {
+    title: 'Not enough headroom',
+    why: 'Track passes over other track without enough height for an engine underneath (set in Settings, default 2 levels).',
+  },
+  'too-close': {
+    title: 'Tracks too close',
+    why: 'Engines and cars are wider than the track; trains on these tracks would scrape each other.',
+  },
+  disconnected: { title: 'Disconnected track', why: 'Pieces that aren’t joined to the main layout can’t be reached by trains.' },
+  'direction-change': { title: 'Turning trains', why: 'Whether an engine can reverse its direction of travel using the track alone.' },
+  unreachable: { title: 'Unreachable track', why: 'No route from the main line leads here, usually because a switch faces the wrong way.' },
+  'one-way-loop': {
+    title: 'Loop reachable one way only',
+    why: 'Trains running one direction can get into this loop, trains running the other way can’t.',
+  },
+  'conflict-points': {
+    title: 'Junctions and crossings',
+    why: 'Places where two trains’ paths meet; with more than one engine they can collide there.',
+  },
+  'head-on': { title: 'Head-on risk', why: 'Once a train turns around it runs against the others on the same track.' },
+  capacity: { title: 'Too many engines', why: 'Each extra engine needs a passing loop, a long enough siding, or a stop to wait at.' },
+  'trailing-switch': {
+    title: 'Switches that must be set',
+    why: 'Your settings say engines derail when going through a switch set against them.',
+  },
+  'short-siding': { title: 'Siding too short', why: 'A train left in the siding would stick out and block the main line.' },
+  'short-passing-loop': { title: 'Passing loop too short', why: 'Neither track is long enough to hold a train clear of both switches.' },
+  'stop-on-grade': {
+    title: 'Stop on a slope',
+    why: 'An engine stopped on or at the foot of a ramp may not have the grip to restart uphill.',
+  },
+  'stop-near-junction': { title: 'Stop close to a junction', why: 'A train waiting here sticks out across the junction and blocks it.' },
+  footprint: { title: 'Doesn’t fit your space', why: 'The layout is bigger than the space set in Settings.' },
   'level-step': { title: 'Height mismatch', why: 'Two ends meet but at different heights; add a ramp.' },
   misaligned: { title: 'Ends almost meet', why: 'Two open ends are close but do not line up; the joint would be forced.' },
   'open-end': { title: 'Open track end', why: 'Trains run off the end. Connect it or finish it with a buffer stop.' },
@@ -48,10 +91,6 @@ export const RULES: Record<string, { title: string; why: string }> = {
   'reverse-curve': { title: 'S-bend', why: 'Opposite curves back to back jerk trains sideways; a straight between them runs smoother.' },
   'switch-on-grade': { title: 'Switch next to a ramp', why: 'Points on or right at a grade are a common stall/derail spot.' },
   'steep-climb': { title: 'Long climb', why: 'Two ramps in a row climb steeply; small battery engines may stall.' },
-  'reversing-loop': {
-    title: 'Reversing loop',
-    why: 'A train can come back along the same track facing the other way. Fine for battery engines, but watch for head-on meets.',
-  },
   'trapped-section': { title: 'Dead-end section', why: 'From here a train can only reach a buffer or end and must stop.' },
 };
 
@@ -172,6 +211,8 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
 export interface ValidateOptions {
   /** Owned piece totals; when given, shortages and supports are checked. */
   owned?: Counts;
+  /** Available floor/table space in mm; when given, the footprint is checked against it. */
+  space?: { width: number; depth: number };
 }
 
 export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: ValidateOptions = {}): ValidationResult {
@@ -204,44 +245,95 @@ export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: Valida
     issues.push(issue('open-end', 'warning', `Open end on ${cat.get(byUid.get(p.uid)!.code).name}.`, [p.uid], p));
   });
 
-  // ---- overlap (sample-based)
-  const cell = params.trackWidth;
+  // ---- overlap, headroom and side clearance (sample-based)
+  // overlap: track beds in the same space (less than one level apart), including solid bodies;
+  // headroom: track passing over other track less than `clearanceLevels` above it;
+  // too close: tracks at the same level nearer than an engine is wide.
+  const headroom = params.clearanceLevels;
+  const reach = Math.max(params.trackWidth, params.vehicleWidth);
+  const cell = reach;
   const minGap = params.trackWidth * 0.85;
-  const grid = new Map<string, { uid: string; x: number; y: number; z: number }[]>();
-  const all = pieces.map((p) => ({ p, samples: [...worldSamples(cat, p).flat(), ...worldBlockers(cat, p)] }));
+  type Pt = { uid: string; x: number; y: number; z: number; body: boolean };
+  const grid = new Map<string, Pt[]>();
+  const all = pieces.map((p) => ({
+    p,
+    samples: [
+      ...worldSamples(cat, p)
+        .flat()
+        .map((q) => ({ ...q, body: false })),
+      ...worldBlockers(cat, p).map((q) => ({ ...q, body: true })),
+    ],
+  }));
   for (const { p, samples } of all)
-    for (const s of samples) {
-      const k = `${Math.floor(s.x / cell)},${Math.floor(s.y / cell)}`;
-      (grid.get(k) ?? grid.set(k, []).get(k)!).push({ uid: p.uid, ...s });
+    for (const q of samples) {
+      const k = `${Math.floor(q.x / cell)},${Math.floor(q.y / cell)}`;
+      (grid.get(k) ?? grid.set(k, []).get(k)!).push({ uid: p.uid, ...q });
     }
-  // joints between each pair of linked pieces
+  // joints between each pair of linked pieces, and pieces within two joints of each other
   const joints = new Map<string, Vec[]>();
+  const nbrs = new Map<string, Set<string>>();
   for (const port of conn.ports) {
     const mate = conn.links.get(portKey(port));
     if (!mate) continue;
     const key = port.uid < mate.uid ? `${port.uid}|${mate.uid}` : `${mate.uid}|${port.uid}`;
     (joints.get(key) ?? joints.set(key, []).get(key)!).push(port);
+    (nbrs.get(port.uid) ?? nbrs.set(port.uid, new Set()).get(port.uid)!).add(mate.uid);
   }
   const nearJoint = (key: string, a: Vec, b: Vec) =>
     (joints.get(key) ?? []).some((j) => dist(j, a) < params.trackWidth && dist(j, b) < params.trackWidth);
-  const reported = new Set<string>();
+  // tracks leaving the same switch run close together for a while; that's expected
+  const closeNeighbours = (a: string, b: string) => {
+    const na = nbrs.get(a) ?? new Set();
+    if (na.has(b)) return true;
+    for (const x of na) if ((nbrs.get(x) ?? new Set()).has(b)) return true;
+    return false;
+  };
+  const found = new Map<string, { rule: 'overlap' | 'headroom' | 'too-close'; at: Vec; dz: number; d: number }>();
+  const rank = { overlap: 3, headroom: 2, 'too-close': 1 } as const;
   for (const { p, samples } of all) {
-    for (const s of samples) {
-      const cx = Math.floor(s.x / cell);
-      const cy = Math.floor(s.y / cell);
+    for (const s0 of samples) {
+      const cx = Math.floor(s0.x / cell);
+      const cy = Math.floor(s0.y / cell);
       for (let dx = -1; dx <= 1; dx++)
         for (let dy = -1; dy <= 1; dy++)
           for (const o of grid.get(`${cx + dx},${cy + dy}`) ?? []) {
             if (o.uid <= p.uid) continue;
             const key = `${p.uid}|${o.uid}`;
-            if (reported.has(key)) continue;
-            if (Math.abs(o.z - s.z) >= params.clearanceLevels - 1e-6) continue;
-            if (dist(o, s) >= minGap) continue;
-            if (nearJoint(key, s, o)) continue;
-            reported.add(key);
-            issues.push(issue('overlap', 'error', 'Pieces overlap.', [p.uid, o.uid], s));
+            const prev = found.get(key);
+            if (prev?.rule === 'overlap') continue;
+            const d = dist(o, s0);
+            if (d >= reach) continue;
+            const dz = Math.abs(o.z - s0.z);
+            if (dz >= headroom - 1e-6 && !(s0.body || o.body)) continue;
+            if (nearJoint(key, s0, o)) continue;
+            let rule: 'overlap' | 'headroom' | 'too-close' | undefined;
+            if (dz < 1 - 1e-6 && d < minGap) rule = 'overlap';
+            else if (s0.body || o.body)
+              continue; // a solid body only matters for direct overlap
+            else if (closeNeighbours(p.uid, o.uid)) continue;
+            else if (dz >= 1 - 1e-6) rule = 'headroom';
+            else rule = 'too-close';
+            if (!prev || rank[rule] > rank[prev.rule]) found.set(key, { rule, at: s0, dz, d });
           }
     }
+  }
+  for (const [key, f] of found) {
+    const uids = key.split('|');
+    if (f.rule === 'overlap') issues.push(issue('overlap', 'error', 'Pieces overlap.', uids, f.at));
+    else if (f.rule === 'headroom')
+      issues.push(
+        issue('headroom', 'error', `Only ${Math.floor(f.dz + 1e-6)} level of headroom here; engines need ${headroom}.`, uids, f.at),
+      );
+    else
+      issues.push(
+        issue(
+          'too-close',
+          'warning',
+          `Tracks are ${Math.round(f.d)} mm apart (centre to centre); engines are ${params.vehicleWidth} mm wide.`,
+          uids,
+          f.at,
+        ),
+      );
   }
 
   // ---- pieces under the floor, and free-standing pieces lifted off it
@@ -281,7 +373,6 @@ export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: Valida
   if (trackPieces.length > 0 && running.onCycle.size === 0) {
     issues.push(issue('no-loop', 'warning', 'There is no closed loop, so engines will always reach an end.', []));
   }
-  if (running.hasReversingLoop) issues.push(issue('reversing-loop', 'info', 'Contains a reversing loop.', []));
   if (running.onCycle.size > 0) {
     // pieces from which, in some direction, a train is forced to stop
     const trapped = new Set<string>();
@@ -297,6 +388,26 @@ export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: Valida
     const offLoop = [...trapped].filter((u) => !running.loopPieces.has(u));
     if (offLoop.length && open.length > 0)
       issues.push(issue('trapped-section', 'info', `${offLoop.length} piece(s) lead only to a dead end.`, offLoop));
+  }
+
+  // ---- how trains run: turning, reachability, conflicts, siding lengths, stops, disconnected track
+  issues.push(...operationalChecks(cat, pieces, conn));
+
+  // ---- footprint against the available space
+  if (opts.space && trackPieces.length) {
+    const b = layoutBounds(cat, pieces);
+    const { width: W, depth: D } = opts.space;
+    if (b.width > W + 0.5 || b.height > D + 0.5) {
+      const rotated = b.height <= W + 0.5 && b.width <= D + 0.5;
+      issues.push(
+        issue(
+          'footprint',
+          'warning',
+          `Layout is ${Math.round(b.width / 10)} × ${Math.round(b.height / 10)} cm; your space is ${Math.round(W / 10)} × ${Math.round(D / 10)} cm.${rotated ? ' It fits if you turn it 90°.' : ''}`,
+          [],
+        ),
+      );
+    }
   }
 
   // ---- design rules on consecutive pieces

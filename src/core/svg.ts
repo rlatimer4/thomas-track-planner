@@ -8,7 +8,7 @@ export function layoutToSvg(cat: Catalog, pieces: PlacedPiece[], opts: { labels?
   const b = layoutBounds(cat, pieces);
   const m = opts.margin ?? 40;
   const w = Math.max(1, b.width + 2 * m);
-  const h = Math.max(1, b.height + 2 * m);
+  const h = Math.max(1, b.height + 2 * m + 30);
   const tw = cat.params.trackWidth;
   const sorted = [...pieces].sort((a, b2) => a.z - b2.z);
   const parts: string[] = [];
@@ -31,5 +31,9 @@ export function layoutToSvg(cat: Catalog, pieces: PlacedPiece[], opts: { labels?
       );
     }
   }
+  if (pieces.length)
+    parts.push(
+      `<text x="${m}" y="${(h - 12).toFixed(1)}" font-size="22" font-family="sans-serif" fill="#0369a1">Footprint: ${(b.width / 10).toFixed(0)} × ${(b.height / 10).toFixed(0)} cm (${(b.width / 25.4).toFixed(0)} × ${(b.height / 25.4).toFixed(0)} in)</text>`,
+    );
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w.toFixed(0)} ${h.toFixed(0)}" width="${(w / 2).toFixed(0)}" height="${(h / 2).toFixed(0)}"><rect width="100%" height="100%" fill="#f8fafc"/>${parts.join('')}</svg>`;
 }

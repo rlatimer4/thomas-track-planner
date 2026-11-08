@@ -22,6 +22,14 @@ export interface GeometryParams {
   levelHeight: number;
   /** Minimum level difference for one track to pass over another. */
   clearanceLevels: number;
+  /** Number of engines that run at the same time (for collision and capacity checks). */
+  engineCount: number;
+  /** Longest train (engine + cars), mm: sidings and passing loops must hold it. */
+  trainLength: number;
+  /** Widest engine/car body, mm: parallel tracks closer than this are too close. */
+  vehicleWidth: number;
+  /** 1 if an engine pushes through a switch set against it when arriving from a branch, 0 if it derails. */
+  trailingPushThrough: number;
   /** Joints within this distance (mm) are treated as connected. Toy track has some play. */
   joinTolerance: number;
   /** Joints within this angle (degrees) are treated as connected. */
@@ -36,9 +44,13 @@ export const DEFAULT_PARAMS: GeometryParams = {
   parallelSpacing: 70,
   trackWidth: 46,
   levelHeight: 65,
-  clearanceLevels: 1,
+  clearanceLevels: 2,
   joinTolerance: 12,
   angleTolerance: 4,
+  engineCount: 2,
+  trainLength: 250,
+  vehicleWidth: 60,
+  trailingPushThrough: 1,
 };
 
 export type PieceCategory = 'straight' | 'curve' | 'switch' | 'ramp' | 'buffer' | 'crossing' | 'station' | 'bridge' | 'support';
@@ -84,6 +96,8 @@ export interface PieceSpec {
   pairedSupport?: boolean;
   /** Supports that can be stacked on each other to reach higher levels. */
   stackable?: boolean;
+  /** Pieces with a stop/go lever where engines wait (stop track, docks, station). */
+  stop?: boolean;
 }
 
 export interface PortDef {
@@ -105,6 +119,8 @@ export interface PieceType extends PieceSpec {
   stockCode: string;
   /** Route table: for each port, the ports a train can leave through after entering it. */
   routes: Record<string, string[]>;
+  /** Centre-line length of each route, keyed `from>to`, mm. */
+  routeLength: Record<string, number>;
   isTrack: boolean;
   /** Total centre-line length of the main route, mm (used for scoring). */
   length: number;
@@ -223,9 +239,12 @@ export function builtinSpecs(p: GeometryParams): PieceSpec[] {
     // Curves
     curve('C', 'Curve', `Standard curve: ${A}° turn, ${Math.round(360 / A)} make a circle.`, '#4b5563'),
     curve('CU4', 'Curve (support tabs)', 'Curve with tabs that clip onto supports.', '#374151'),
-    curve('CS2', 'Curve with stop', 'Curve with a built-in stop/go lever.', '#4b5563'),
+    curve('CS2', 'Curve with stop', 'Curve with a built-in stop/go lever.', '#4b5563', { stop: true }),
     curve('CHT', 'Curve (raised)', 'Curve used at the top of raised sections.', '#334155', { approximate: true }),
-    curve('DOCK', 'Brendam Docks curve', 'Dock curve with a stop lever; part of the GLK80 set.', '#a16207', { approximate: true }),
+    curve('DOCK', 'Brendam Docks curve', 'Dock curve with a stop lever; part of the GLK80 set.', '#a16207', {
+      approximate: true,
+      stop: true,
+    }),
     // Switches
     sw('TL', 'Switch, left', -A, 'Points: straight through, or branch curving left.'),
     sw('TR', 'Switch, right', A, 'Points: straight through, or branch curving right.'),
@@ -276,6 +295,7 @@ export function builtinSpecs(p: GeometryParams): PieceSpec[] {
       description: 'Two parallel lanes with stop levers. Feed it with an offset switch (PR/PL) at each end.',
       color: '#6b7280',
       approximate: true,
+      stop: true,
       paths: [
         { from: 'a', to: 'b', ops: [line(S)] },
         { from: 'c', to: 'd', start: { x: 0, y: p.parallelSpacing, dir: 0 }, ops: [line(S)] },
@@ -392,6 +412,7 @@ export function resolveSpec(spec: PieceSpec, sampleStep = 8): PieceType {
   const addPort = (pd: PortDef) => {
     if (!ports.has(pd.id)) ports.set(pd.id, pd);
   };
+  const routeLength: Record<string, number> = {};
   const addRoute = (a: string, b: string) => {
     (routes[a] ??= []).includes(b) || routes[a].push(b);
   };
@@ -407,6 +428,8 @@ export function resolveSpec(spec: PieceSpec, sampleStep = 8): PieceType {
       addPort({ id: path.to, x: w.end.x, y: w.end.y, dir: normDeg(w.end.dir), z: zTo });
       addRoute(path.from, path.to);
       addRoute(path.to, path.from);
+      routeLength[`${path.from}>${path.to}`] = w.length;
+      routeLength[`${path.to}>${path.from}`] = w.length;
     } else {
       routes[path.from] ??= [];
     }
@@ -426,6 +449,7 @@ export function resolveSpec(spec: PieceSpec, sampleStep = 8): PieceType {
   return {
     ...spec,
     stockCode: spec.stock ?? spec.code,
+    routeLength,
     blockers,
     ports: [...ports.values()],
     samples,

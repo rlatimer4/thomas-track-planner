@@ -34,7 +34,7 @@ interface View {
 const MAX_HISTORY = 200;
 
 export function Builder() {
-  const { catalog: cat, owned, currentLayout, saveLayout, update, layouts, units } = useStore();
+  const { catalog: cat, owned, currentLayout, saveLayout, update, layouts, units, space } = useStore();
   const [pieces, setPiecesRaw] = useState<PlacedPiece[]>(currentLayout.pieces);
   const [past, setPast] = useState<PlacedPiece[][]>([]);
   const [future, setFuture] = useState<PlacedPiece[][]>([]);
@@ -46,6 +46,7 @@ export function Builder() {
   } | null>(null);
   const [view, setView] = useState<View>({ tx: 300, ty: 250, s: 0.5 });
   const [labels, setLabels] = useState(true);
+  const [showFootprint, setShowFootprint] = useState(false);
   const [onlyOwned, setOnlyOwned] = useState(true);
   const [panel, setPanel] = useState<'issues' | 'parts' | null>(typeof window !== 'undefined' && window.innerWidth > 900 ? 'issues' : null);
   const [focusIssue, setFocusIssue] = useState<Issue | null>(null);
@@ -83,7 +84,7 @@ export function Builder() {
     setSel(null);
   };
 
-  const validation = useMemo(() => validateLayout(cat, pieces, { owned }), [cat, pieces, owned]);
+  const validation = useMemo(() => validateLayout(cat, pieces, { owned, space: space ?? undefined }), [cat, pieces, owned, space]);
   const openPorts = validation.conn.open;
   const problemUids = useMemo(() => {
     const s = new Set<string>();
@@ -426,6 +427,9 @@ export function Builder() {
         <label className="check">
           <input type="checkbox" checked={labels} onChange={(e) => setLabels(e.target.checked)} /> Codes
         </label>
+        <label className="check">
+          <input type="checkbox" checked={showFootprint} onChange={(e) => setShowFootprint(e.target.checked)} /> Footprint
+        </label>
         <span className="sep" />
         <button onClick={exportJson}>Export</button>
         <button onClick={importJson}>Import</button>
@@ -486,6 +490,7 @@ export function Builder() {
             </defs>
             <g transform={`translate(${view.tx} ${view.ty}) scale(${view.s})`}>
               <rect x={-20000} y={-20000} width={40000} height={40000} fill="url(#grid)" />
+              {showFootprint && pieces.length > 0 && <Footprint bounds={bounds} space={space} scale={view.s} units={units} />}
               {sortedPieces.map((p) => (
                 <TrackPiece
                   key={p.uid}
@@ -593,6 +598,72 @@ export function Builder() {
         )}
       </div>
     </div>
+  );
+}
+
+/** Dashed outline of the area the layout covers, with its size, and the user's space for comparison. */
+function Footprint({
+  bounds: b,
+  space,
+  scale,
+  units,
+}: {
+  bounds: ReturnType<typeof layoutBounds>;
+  space: { width: number; depth: number } | null;
+  scale: number;
+  units: 'cm' | 'in';
+}) {
+  const fs = 15 / Math.max(scale, 0.05);
+  const gap = 30 / Math.max(scale, 0.05);
+  const sw = 2 / Math.max(scale, 0.05);
+  const fits = space && b.width <= space.width + 0.5 && b.height <= space.depth + 0.5;
+  const fitsRotated = space && b.height <= space.width + 0.5 && b.width <= space.depth + 0.5;
+  const spaceColor = fits ? '#16a34a' : fitsRotated ? '#d97706' : '#dc2626';
+  return (
+    <g className="footprint" pointerEvents="none">
+      {space && (
+        <>
+          <rect
+            x={b.minX}
+            y={b.minY}
+            width={space.width}
+            height={space.depth}
+            fill={spaceColor}
+            fillOpacity={0.05}
+            stroke={spaceColor}
+            strokeWidth={sw}
+            strokeDasharray={`${sw * 6} ${sw * 4}`}
+          />
+          <text x={b.minX + space.width} y={b.minY + space.depth + fs * 1.4} fontSize={fs} textAnchor="end" fill={spaceColor}>
+            Your space {fmtLen(space.width, units)} × {fmtLen(space.depth, units)}
+            {fits ? ' — fits' : fitsRotated ? ' — fits if turned 90°' : ' — too small'}
+          </text>
+        </>
+      )}
+      <rect x={b.minX} y={b.minY} width={b.width} height={b.height} fill="none" stroke="#0ea5e9" strokeWidth={sw} />
+      {/* width along the top */}
+      <line x1={b.minX} y1={b.minY - gap} x2={b.maxX} y2={b.minY - gap} stroke="#0ea5e9" strokeWidth={sw} />
+      <line x1={b.minX} y1={b.minY - gap * 1.4} x2={b.minX} y2={b.minY - gap * 0.6} stroke="#0ea5e9" strokeWidth={sw} />
+      <line x1={b.maxX} y1={b.minY - gap * 1.4} x2={b.maxX} y2={b.minY - gap * 0.6} stroke="#0ea5e9" strokeWidth={sw} />
+      <text x={(b.minX + b.maxX) / 2} y={b.minY - gap - fs * 0.4} fontSize={fs} textAnchor="middle" fill="#0369a1" fontWeight={700}>
+        {fmtLen(b.width, units)}
+      </text>
+      {/* depth along the left */}
+      <line x1={b.minX - gap} y1={b.minY} x2={b.minX - gap} y2={b.maxY} stroke="#0ea5e9" strokeWidth={sw} />
+      <line x1={b.minX - gap * 1.4} y1={b.minY} x2={b.minX - gap * 0.6} y2={b.minY} stroke="#0ea5e9" strokeWidth={sw} />
+      <line x1={b.minX - gap * 1.4} y1={b.maxY} x2={b.minX - gap * 0.6} y2={b.maxY} stroke="#0ea5e9" strokeWidth={sw} />
+      <text
+        x={b.minX - gap - fs * 0.4}
+        y={(b.minY + b.maxY) / 2}
+        fontSize={fs}
+        textAnchor="middle"
+        fill="#0369a1"
+        fontWeight={700}
+        transform={`rotate(-90 ${b.minX - gap - fs * 0.4} ${(b.minY + b.maxY) / 2})`}
+      >
+        {fmtLen(b.height, units)}
+      </text>
+    </g>
   );
 }
 

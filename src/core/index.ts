@@ -8,3 +8,4 @@ export * from './graph';
 export * from './validate';
 export * from './autogen';
 export * from './svg';
+export * from './operations';
