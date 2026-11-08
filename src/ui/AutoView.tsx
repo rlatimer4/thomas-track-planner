@@ -13,6 +13,7 @@ const PRINCIPLES = [
   ['Passing places', 'Offset switches form double-track sections and the two-lane station so two engines can pass or wait.'],
   ['Support check', 'Raised joints are matched against the supports you own (piers and support pairs with a deck).'],
   ['Uses what you own', 'Only pieces in your inventory are used, and the space limit is respected.'],
+  ['Interesting and compact', 'Bridges where track crosses over itself score highest, then height and a compact footprint.'],
 ];
 
 export function AutoView({ onOpen }: { onOpen: () => void }) {

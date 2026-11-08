@@ -17,7 +17,8 @@
  * 4. Every candidate is checked by the same validator the builder uses, and scored with
  *    railroad design rules in mind (continuous running, no dead ends without buffers,
  *    grade separation at crossings, no switches on grades, tangents between reverse
- *    curves, supports available for raised track, fits the space).
+ *    curves, supports available for raised track, fits the space). Interesting layouts
+ *    score higher: bridge crossings, height, and compact footprints (see SCORE_WEIGHTS).
  */
 import { angleDiff, dist, normDeg, stepPose, type Pose, type Sample, type Vec } from './geometry';
 import type { Catalog, PieceType } from './catalog';
@@ -715,18 +716,112 @@ function addSpur(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): boolean 
 
 // ---------------------------------------------------------------- scoring
 
-function scoreCandidate(cat: Catalog, pieces: PlacedPiece[], owned: Counts, features: string[], word: TurnWord) {
+/**
+ * Places where track passes over other track with enough headroom (bridges, figure-8 crossovers,
+ * ground track through the bucket's tunnel). Nearby points of the same crossing count once.
+ */
+export function bridgeCrossings(cat: Catalog, pieces: PlacedPiece[]): Vec[] {
+  const headroom = cat.params.clearanceLevels;
+  const cell = cat.params.straight / 2;
+  type Seg = { uid: string; a: Sample; b: Sample };
+  const segs: Seg[] = [];
+  for (const p of pieces)
+    for (const path of worldSamples(cat, p)) for (let i = 1; i < path.length; i++) segs.push({ uid: p.uid, a: path[i - 1], b: path[i] });
+  // bucket segments by every grid cell their bounding box touches
+  const grid = new Map<string, number[]>();
+  segs.forEach((g, i) => {
+    for (let x = Math.floor(Math.min(g.a.x, g.b.x) / cell); x <= Math.floor(Math.max(g.a.x, g.b.x) / cell); x++)
+      for (let y = Math.floor(Math.min(g.a.y, g.b.y) / cell); y <= Math.floor(Math.max(g.a.y, g.b.y) / cell); y++) {
+        const k = `${x},${y}`;
+        (grid.get(k) ?? grid.set(k, []).get(k)!).push(i);
+      }
+  });
+  const sites: Vec[] = [];
+  const seen = new Set<string>();
+  for (const ids of grid.values())
+    for (let m = 0; m < ids.length; m++)
+      for (let n = m + 1; n < ids.length; n++) {
+        const [i, j] = ids[m] < ids[n] ? [ids[m], ids[n]] : [ids[n], ids[m]];
+        const key = `${i},${j}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const g = segs[i];
+        const h = segs[j];
+        if (g.uid === h.uid) continue;
+        // where the two centre-lines cross in plan, and the height of each there
+        const rx = g.b.x - g.a.x;
+        const ry = g.b.y - g.a.y;
+        const sx = h.b.x - h.a.x;
+        const sy = h.b.y - h.a.y;
+        const den = rx * sy - ry * sx;
+        if (Math.abs(den) < 1e-9) continue;
+        const t = ((h.a.x - g.a.x) * sy - (h.a.y - g.a.y) * sx) / den;
+        const u = ((h.a.x - g.a.x) * ry - (h.a.y - g.a.y) * rx) / den;
+        if (t < 0 || t > 1 || u < 0 || u > 1) continue;
+        const zg = g.a.z + t * (g.b.z - g.a.z);
+        const zh = h.a.z + u * (h.b.z - h.a.z);
+        if (Math.abs(zg - zh) < headroom - 1e-6) continue;
+        const at = { x: g.a.x + t * rx, y: g.a.y + t * ry };
+        if (!sites.some((q) => dist(q, at) < cat.params.straight)) sites.push(at);
+      }
+  return sites;
+}
+
+/** Total centre-line length of all track, mm. */
+function trackLength(cat: Catalog, pieces: PlacedPiece[]): number {
+  let total = 0;
+  for (const p of pieces)
+    for (const path of worldSamples(cat, p)) for (let i = 1; i < path.length; i++) total += dist(path[i - 1], path[i]);
+  return total;
+}
+
+/** Share of the track (by length) that runs above the floor. */
+function raisedShare(cat: Catalog, pieces: PlacedPiece[]): number {
+  let raised = 0;
+  let total = 0;
+  for (const p of pieces)
+    for (const path of worldSamples(cat, p))
+      for (let i = 1; i < path.length; i++) {
+        const d = dist(path[i - 1], path[i]);
+        total += d;
+        if ((path[i - 1].z + path[i].z) / 2 > 0.5) raised += d;
+      }
+  return total ? raised / total : 0;
+}
+
+/** Points for each part of the score, so the UI can explain it. */
+export const SCORE_WEIGHTS = {
+  piecesUsed: 30,
+  continuousRunning: 20,
+  perFeature: 8,
+  perCrossing: 30,
+  maxCrossings: 3,
+  perLevel: 10,
+  raisedShare: 30,
+  /** Points per unit of coverage (track area / footprint area). */
+  compactness: 150,
+  maxCompactness: 45,
+} as const;
+
+function scoreCandidate(cat: Catalog, pieces: PlacedPiece[], owned: Counts, features: string[]) {
+  const W = SCORE_WEIGHTS;
   const v = validateLayout(cat, pieces, { owned });
   const trackOwned = Object.entries(owned).reduce((a, [c, n]) => a + (cat.has(c) && cat.get(c).isTrack ? n : 0), 0);
   const used = pieces.length;
   const breakdown: Record<string, number> = {};
-  breakdown['Pieces used'] = Math.round(60 * Math.min(1, used / Math.max(1, trackOwned)));
-  breakdown['Continuous running'] = v.running.onCycle.size > 0 ? 20 : -50;
-  breakdown['Track features'] = features.length * 8;
+  breakdown['Pieces used'] = Math.round(W.piecesUsed * Math.min(1, used / Math.max(1, trackOwned)));
+  breakdown['Continuous running'] = v.running.onCycle.size > 0 ? W.continuousRunning : -50;
+  breakdown['Track features'] = features.length * W.perFeature;
+  // bridges: track crossing over other track
+  const crossings = bridgeCrossings(cat, pieces).length;
+  breakdown['Bridge crossings'] = W.perCrossing * Math.min(crossings, W.maxCrossings);
+  // verticality: how high it climbs, and how much of it is up in the air
   const maxZ = Math.max(0, ...pieces.map((p) => p.z + Math.max(...cat.get(p.code).ports.map((q) => q.z))));
-  breakdown['Elevation'] = maxZ > 0 ? 8 : 0;
-  const netTurn = word.reduce((a, b) => a + b, 0);
-  breakdown['Crossover'] = netTurn === 0 ? 10 : 0;
+  breakdown['Height'] = W.perLevel * maxZ + Math.round(W.raisedShare * raisedShare(cat, pieces));
+  // compactness: how densely the track fills its footprint
+  const b = layoutBounds(cat, pieces);
+  const coverage = (trackLength(cat, pieces) * cat.params.trackWidth) / Math.max(1, b.width * b.height);
+  breakdown['Compact'] = Math.round(Math.min(W.maxCompactness, W.compactness * coverage));
   const rev = v.issues.filter((i) => i.rule === 'reverse-curve').length;
   breakdown['S-bends'] = -6 * rev;
   const warn = v.issues.filter((i) => i.severity === 'warning').length;
@@ -736,14 +831,15 @@ function scoreCandidate(cat: Catalog, pieces: PlacedPiece[], owned: Counts, feat
   const errors = v.issues.filter((i) => i.severity === 'error').length;
   breakdown['Errors'] = -100 * errors;
   const score = Object.values(breakdown).reduce((a, b) => a + b, 0);
-  return { score, breakdown, issues: v.issues, valid: errors === 0 };
+  return { score, breakdown, issues: v.issues, valid: errors === 0, crossings };
 }
 
-function describe(word: TurnWord, features: string[], maxZ: number): string {
+function describe(word: TurnWord, features: string[], maxZ: number, crossings = 0): string {
   const net = word.reduce((a, b) => a + b, 0);
   const hasLeft = word.some((t) => t < 0);
   let shape = net === 0 ? 'Figure-8' : hasLeft ? 'Bent loop' : 'Oval loop';
-  if (maxZ > 0 && net !== 0) shape += ' with hill';
+  if (crossings > 0 && net !== 0) shape += ' with bridge';
+  else if (maxZ > 0 && net !== 0) shape += ' with hill';
   if (features.some((f) => f.includes('station'))) shape += ' + station';
   else if (features.some((f) => f.includes('Passing') || f.includes('Double'))) shape += ' + passing loop';
   if (features.some((f) => f.includes('Siding'))) shape += ' + siding';
@@ -787,20 +883,25 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
   // mirror images too
   const allWords = [...words, ...words.filter((w) => w.some((t) => t < 0)).map((w) => w.map((t) => -t))];
 
+  const fig8Words = allWords.filter((w) => w.reduce((a, b) => a + b, 0) === 0);
+
   const results = new Map<string, Candidate>();
   let attempts = 0;
   while (Date.now() - t0 < budgetMs && attempts < 20000) {
     attempts++;
-    const word = pick(rng, allWords);
+    // figure-8s give a bridge crossing, so offer them often when any shape is allowed
+    const word = style === 'any' && fig8Words.length && rng() < 0.4 ? pick(rng, fig8Words) : pick(rng, allWords);
     const net = word.reduce((a, b) => a + b, 0);
     // figure-8s need a raised crossing; loops get a hill sometimes when asked
     const maxPairs = Math.min(Math.floor(nRamp / 2), 3);
     let pairs = 0;
+    // more climbs make taller layouts; lean towards them
+    const climbPairs = () => Math.max(randInt(rng, 1, maxPairs), randInt(rng, 1, maxPairs));
     if (net === 0) {
       if (maxPairs < 1) continue;
-      pairs = randInt(rng, 1, maxPairs);
-    } else if (opts.wantElevation !== false && maxPairs > 0 && rng() < 0.5) {
-      pairs = randInt(rng, 1, maxPairs);
+      pairs = climbPairs();
+    } else if (opts.wantElevation !== false && maxPairs > 0 && rng() < 0.85) {
+      pairs = climbPairs();
     }
     // curves the word needs beyond the climbing ones must be plain curves
     if (word.length - 2 * pairs > nCurves) continue;
@@ -838,7 +939,7 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
       b = layoutBounds(cat, pieces);
     }
 
-    const s = scoreCandidate(cat, pieces, owned, st.features, word);
+    const s = scoreCandidate(cat, pieces, owned, st.features);
     if (!s.valid) continue;
     const maxZ = Math.max(0, ...pieces.map((p) => p.z + Math.max(...cat.get(p.code).ports.map((q) => q.z))));
     const counts = pieceCounts(pieces, cat);
@@ -849,10 +950,15 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
     const prev = results.get(sig);
     if (prev && prev.score >= s.score) continue;
     results.set(sig, {
-      name: describe(word, st.features, maxZ),
+      name: describe(word, st.features, maxZ, s.crossings),
       pieces,
       score: s.score,
-      features: [...st.features, ...(maxZ > 0 ? [`Raised to level ${maxZ}`] : []), ...(net === 0 ? ['Crosses over itself'] : [])],
+      features: [
+        ...st.features,
+        ...(maxZ > 0 ? [`Raised to level ${maxZ}`] : []),
+        ...(net === 0 ? ['Crosses over itself'] : []),
+        ...(s.crossings > 0 ? [`${s.crossings} bridge crossing${s.crossings > 1 ? 's' : ''}`] : []),
+      ],
       breakdown: s.breakdown,
       issues: s.issues,
       width: Math.round(b.width),

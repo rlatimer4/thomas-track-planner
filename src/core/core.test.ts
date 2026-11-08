@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BUILTIN_KITS,
+  bridgeCrossings,
   checkSpec,
   fromLegacyCustom,
   makeLayoutFile,
@@ -589,6 +590,27 @@ describe('autogen', () => {
       expect(v.issues.filter((i) => i.rule === 'open-end')).toEqual([]);
       expect(v.running.onCycle.size).toBeGreaterThan(0);
     }
+  }, 20000);
+
+  it('counts a bridge crossing wherever track passes over track with headroom, whichever piece is on top', () => {
+    const S1 = cat.params.straight;
+    const flat = placeChain(cat, startPose(-S1, 0, 0), [S, S]).pieces;
+    const over = (level: number) => placeChain(cat, startPose(0, -S1, 90, level), [S, S]).pieces;
+    expect(bridgeCrossings(cat, [...flat, ...over(2)])).toHaveLength(1);
+    // same crossing with the pieces listed the other way round
+    expect(bridgeCrossings(cat, [...over(2), ...flat])).toHaveLength(1);
+    // one level isn't enough headroom, so it isn't a bridge
+    expect(bridgeCrossings(cat, [...flat, ...over(1)])).toHaveLength(0);
+    expect(bridgeCrossings(cat, oval())).toHaveLength(0);
+  });
+
+  it('prefers layouts with bridges and height', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const res = generateLayouts(cat, { owned, timeBudgetMs: 3000, seed: 11, results: 5 });
+    expect(res.length).toBeGreaterThan(0);
+    expect(res.some((c) => c.breakdown['Bridge crossings'] > 0)).toBe(true);
+    expect(res[0].breakdown['Height']).toBeGreaterThan(0);
+    for (const c of res) expect(c.breakdown['Compact']).toBeGreaterThan(0);
   }, 20000);
 
   it('respects the space limit', () => {

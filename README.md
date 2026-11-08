@@ -134,9 +134,16 @@ has no "What's Included" list, the kit is counted from the labelled pieces in it
    Raised straights use support-tab pieces (`TU4`, `ES3`, `CU4`) when available.
 3. **Decoration.** Straights on the finished loop are swapped for same-length pieces: offset-switch double track, the two-lane
    station, passing loops (switch pairs joined by a short search for connecting track) and sidings ending in buffer stops.
-4. **Checking and ranking.** Every candidate goes through the same validator as the builder and is scored on: pieces used,
-   continuous running, features, elevation and crossings. S-bends, warnings and unsupported joints count against it. Results are
-   de-duplicated, and the shapes are varied.
+4. **Checking and ranking.** Every candidate goes through the same validator as the builder and is scored. Interesting,
+   compact layouts rank highest:
+   - **Bridge crossings** score most: 30 points for each place track passes over other track with enough headroom (up to 3).
+   - **Height:** 10 points per level the layout climbs to, plus up to 30 for how much of the track is raised.
+   - **Compact:** up to 45 points for how densely the track fills its footprint.
+   - Continuous running, features (station, sidings, passing loops) and pieces used add to it. S-bends, warnings and
+     unsupported joints count against it.
+
+   Figure-8s and hills are tried often so there are plenty to choose from. Results are de-duplicated, and the shapes are
+   varied. Hover a result's score to see its breakdown. The weights are `SCORE_WEIGHTS` in `src/core/autogen.ts`.
 
 The railroad rules it follows: continuous running on a closed main loop, no open ends (sidings end in buffers), crossings only with
 grade separation, gentle grades and no switches on ramps, straights between opposite curves where possible, passing places so two
