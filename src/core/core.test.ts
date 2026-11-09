@@ -240,6 +240,25 @@ describe('elevation', () => {
     expect(t.bodyRect!.h / t.bodyRect!.w).toBeGreaterThan(1.5);
   });
 
+  it('a bucket standing over track as a tunnel has no open ends, is not disconnected and is not a bridge', () => {
+    const S1 = cat.params.straight;
+    const track = placeChain(cat, startPose(-S1 / 4, 0, 0), [S]).pieces;
+    const bucket: PlacedPiece = { uid: 'bucket', code: 'BKT', x: 0, y: 0, rot: 0, z: 0 };
+    const v = validateLayout(cat, [...track, bucket], { owned: { S1: 1, BKT: 1 } });
+    expect(v.issues.filter((i) => i.uids.includes('bucket')).map((i) => i.rule)).toEqual([]);
+    expect(v.counts.BKT).toBe(1);
+    expect(bridgeCrossings(cat, [...track, bucket])).toHaveLength(0);
+    // build onto its top and the rest of that top track counts as open again
+    const onTop = placeAt(
+      cat,
+      worldPorts(cat, bucket).find((p) => p.port === 'a')!,
+      'S1',
+      'a',
+    ).piece;
+    const v2 = validateLayout(cat, [...track, bucket, onTop]);
+    expect(v2.issues.some((i) => i.rule === 'open-end' && i.uids.includes('bucket'))).toBe(true);
+  });
+
   it('pieces draw lowest first by the highest point they reach, so the bucket covers a ramp beside it', () => {
     const bucket: PlacedPiece = { uid: 'bucket', code: 'BKT', x: 0, y: 0, rot: 0, z: 0 };
     const ramp: PlacedPiece = { uid: 'ramp', code: 'AL', x: -100, y: 0, rot: 0, z: 0 };
@@ -620,6 +639,15 @@ describe('autogen', () => {
       return res.reduce((a, c) => a + c.pieces.length, 0) / Math.max(1, res.length);
     };
     expect(avg(true)).toBeGreaterThan(avg(false));
+  }, 20000);
+
+  it('can use the bucket, the lid and a second loop', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const res = generateLayouts(cat, { owned, timeBudgetMs: 3000, seed: 2, results: 8, useAll: true });
+    const features = res.flatMap((c) => c.features);
+    const uses = (code: string) => res.some((c) => c.pieces.some((p) => p.code === code));
+    expect(uses('BKT') || uses('XB') || features.includes('Second loop through the middle')).toBe(true);
+    for (const c of res) expect(c.issues.filter((i) => i.severity === 'error')).toEqual([]);
   }, 20000);
 
   it('respects the space limit', () => {

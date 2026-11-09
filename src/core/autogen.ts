@@ -25,7 +25,9 @@ import type { Catalog, PieceType } from './catalog';
 import type { Counts } from './inventory';
 import { placeAt, placeChain, startPose, type ChainStep } from './build';
 import {
+  computeConnectivity,
   layoutBounds,
+  newUid,
   normalizeOrigin,
   pieceCounts,
   portsMate,
@@ -720,6 +722,95 @@ function addSpur(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): boolean 
   return false;
 }
 
+/** Loop straights at ground level or at `level`, with each one's piece. */
+function loopStraights(cat: Catalog, st: DecorState, pools: Pools, level: number): PlacedPiece[] {
+  const byUid = new Map(st.pieces.map((p) => [p.uid, p]));
+  return st.order
+    .map((uid) => byUid.get(uid)!)
+    .filter((p) => pools.straight.includes(p.code) && cat.get(p.code).ports.every((q) => q.z + p.z === level));
+}
+
+/** Stand the bucket over a ground-level straight of the loop, so trains run through its tunnel. */
+function addBucketTunnel(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): boolean {
+  if (!cat.has('BKT') || (st.avail.BKT ?? 0) < 1) return false;
+  const tunnelLength = cat.get('BKT').bodyRect ? cat.get('BKT').ports.find((q) => q.id === 'b')!.x : 0;
+  for (const p of shuffle(rng, loopStraights(cat, st, pools, 0)).slice(0, 8)) {
+    const a = piecePortPose(cat, p, 'a');
+    const b = piecePortPose(cat, p, 'b');
+    const len = dist(a, b);
+    const ux = (b.x - a.x) / len;
+    const uy = (b.y - a.y) / len;
+    const rot = normDeg((Math.atan2(uy, ux) * 180) / Math.PI);
+    // centre the tunnel on the middle of the straight
+    const off = (len - tunnelLength) / 2;
+    const bucket: PlacedPiece = { uid: newUid(), code: 'BKT', x: a.x + ux * off, y: a.y + uy * off, rot, z: 0 };
+    if (!tryCommit(cat, st, [...st.pieces, bucket])) continue;
+    st.avail.BKT--;
+    st.features.push('Tunnel through the track bucket');
+    return true;
+  }
+  return false;
+}
+
+/** Put the bucket lid in place of a straight at level 1: it holds itself up, and its side legs end in buffer stops. */
+function addLidFork(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): boolean {
+  if (!cat.has('XB') || (st.avail.XB ?? 0) < 1) return false;
+  const buffers = pools.buffer.flatMap((c) => Array(Math.max(0, st.avail[c] ?? 0)).fill(c) as string[]);
+  if (buffers.length < 2) return false;
+  for (const p of shuffle(rng, loopStraights(cat, st, pools, 1)).slice(0, 6)) {
+    for (const inPort of shuffle(rng, ['a', 'b'])) {
+      const lid = replaceInline(cat, st, p.uid, 'XB', inPort);
+      const ends = ['c', 'd'].map((port) => placeAt(cat, piecePortPose(cat, lid, port), buffers[port === 'c' ? 0 : 1], 'a').piece);
+      if (!tryCommit(cat, st, withReplaced(st, [lid], ends))) continue;
+      giveBack(st, [p.code]);
+      st.avail.XB--;
+      st.avail[buffers[0]]--;
+      st.avail[buffers[1]]--;
+      st.features.push('Bucket lid as a raised 3-way fork');
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Join two straights on different sides of the loop with a pair of switches and a new track between them,
+ * giving a second loop through the middle.
+ */
+function addSecondLoop(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): boolean {
+  const switches = [...SWITCH_RIGHT, ...SWITCH_LEFT].filter((c) => cat.has(c));
+  const runs = straightRuns(cat, st, pools);
+  if (runs.length < 2) return false;
+  let tries = 0;
+  for (let attempt = 0; attempt < 12 && tries < 8; attempt++) {
+    const [r1, r2] = shuffle(rng, runs).slice(0, 2);
+    const uA = st.order[pick(rng, r1)];
+    const uB = st.order[pick(rng, r2)];
+    const codeA = pick(rng, switches);
+    const codeB = pick(rng, switches);
+    const avail = { ...st.avail };
+    avail[codeA] = (avail[codeA] ?? 0) - 1;
+    avail[codeB] = (avail[codeB] ?? 0) - 1;
+    if (avail[codeA] < 0 || avail[codeB] < 0) continue;
+    const pA = replaceInline(cat, st, uA, codeA, pick(rng, ['a', 'b']));
+    const pB = replaceInline(cat, st, uB, codeB, pick(rng, ['a', 'b']));
+    const base = withReplaced(st, [pA, pB]);
+    const freed = [st.pieces.find((p) => p.uid === uA)!.code, st.pieces.find((p) => p.uid === uB)!.code];
+    freed.forEach((c) => (avail[c] = (avail[c] ?? 0) + 1));
+    tries++;
+    const link = connectPorts(cat, pools, base, piecePortPose(cat, pA, 'c'), piecePortPose(cat, pB, 'c'), avail, 10);
+    if (!link) continue;
+    // don't put the new switches straight onto a ramp
+    const next = [...base, ...link];
+    const onGrade = (ps: PlacedPiece[]) => validateLayout(cat, ps).issues.filter((i) => i.rule === 'switch-on-grade').length;
+    if (onGrade(next) > onGrade(st.pieces) || !tryCommit(cat, st, next)) continue;
+    st.avail = avail;
+    st.features.push('Second loop through the middle');
+    return true;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------- scoring
 
 /**
@@ -731,7 +822,9 @@ export function bridgeCrossings(cat: Catalog, pieces: PlacedPiece[]): Vec[] {
   const cell = cat.params.straight / 2;
   type Seg = { uid: string; a: Sample; b: Sample };
   const segs: Seg[] = [];
-  for (const p of pieces)
+  // a free-standing piece with nothing joined to it (the bucket over a tunnel) carries no train on top
+  const linked = new Set([...computeConnectivity(cat, pieces).links.keys()].map((k) => k.split(':')[0]));
+  for (const p of pieces.filter((q) => !cat.get(q.code).body || linked.has(q.uid)))
     for (const path of worldSamples(cat, p)) for (let i = 1; i < path.length; i++) segs.push({ uid: p.uid, a: path[i - 1], b: path[i] });
   // bucket segments by every grid cell their bounding box touches
   const grid = new Map<string, number[]>();
@@ -932,12 +1025,16 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
     const always = !!opts.useAll;
     if (opts.wantStation !== false && (always || rng() < 0.8))
       addStation(cat, st, pools, rng, true) || addStation(cat, st, pools, rng, false);
+    if (opts.wantSidings !== false && (always || rng() < 0.35)) addSecondLoop(cat, st, pools, rng);
+    if (always || rng() < 0.5) addLidFork(cat, st, pools, rng);
     if (opts.wantSidings !== false) {
       if (always || rng() < 0.6) addSiding(cat, st, pools, rng);
       if (always || rng() < 0.7) addSpur(cat, st, pools, rng);
       // using all the pieces: keep adding sidings while there's room for them
       if (always) for (let i = 0; i < 3 && addSpur(cat, st, pools, rng); i++);
     }
+    // last, so it doesn't take a straight a station or siding needed
+    if (always || rng() < 0.5) addBucketTunnel(cat, st, pools, rng);
 
     // fit the space
     let pieces = normalizeOrigin(cat, st.pieces);

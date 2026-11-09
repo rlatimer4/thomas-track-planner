@@ -75,7 +75,7 @@ Height is counted in **levels**. Ground is level 0, and each support height is o
 | `RR1` | Rock-style pier for level 1. Stands on its own; does not stack |
 | `RS1`, `RS2`, `RS3` | Supports for levels 1, 2 and 3. Used in pairs (one column each side) with a `D1` deck under the joint. They stack: two `RS1` equal one `RS2`, and `RS2` + `RS1` reach level 3 |
 | `XB` | Bucket lid: a 3-way fork (left, straight, right) standing one level up on its own legs. Ramp up to it |
-| `BKT` | Track bucket, turned over: two tracks cross corner to corner on its bottom at level 4, 120° apart, and a tunnel underneath, along the line bisecting that 120° angle, lets it stand over two of your own ground tracks side by side (it has no track of its own) |
+| `BKT` | Track bucket, turned over (with nothing joined on top it is just a tunnel, so its top ends aren't open ends): two tracks cross corner to corner on its bottom at level 4, 120° apart, and a tunnel underneath, along the line bisecting that 120° angle, lets it stand over two of your own ground tracks side by side (it has no track of its own) |
 | `VB` | Vicarstown lift bridge: carries a straight at level 2, holding both of its ends, so track can pass underneath |
 
 How it's checked:
@@ -134,6 +134,10 @@ has no "What's Included" list, the kit is counted from the labelled pieces in it
    Raised straights use support-tab pieces (`TU4`, `ES3`, `CU4`) when available.
 3. **Decoration.** Straights on the finished loop are swapped for same-length pieces: offset-switch double track, the two-lane
    station, passing loops (switch pairs joined by a short search for connecting track) and sidings ending in buffer stops.
+   It can also add:
+   - a **second loop**: switches on two different sides of the loop, joined by a track through the middle;
+   - the **bucket lid** in place of a straight at level 1, as a raised 3-way fork whose side legs end in buffer stops;
+   - the **bucket**, standing over a ground-level straight so trains run through its tunnel.
 4. **Checking and ranking.** Every candidate goes through the same validator as the builder and is scored. Interesting,
    compact layouts rank highest:
    - **Bridge crossings** score most: 30 points for each place track passes over other track with enough headroom (up to 3).
@@ -141,8 +145,8 @@ has no "What's Included" list, the kit is counted from the labelled pieces in it
    - **Compact:** up to 45 points for how densely the track fills its footprint.
    - **Pieces used:** up to 60 points, by the share of your track the layout uses. Each result says how many it uses.
      **Use all my pieces** makes this count for up to 250 and builds bigger layouts: the longest loops, extra
-     straights, every climb, and as many sidings and passing loops as fit. Usually not every piece can be placed, since
-     the generator builds one main loop and some pieces (the bucket, the lid, offset switches) only fit particular spots.
+     straights, every climb, a second loop, the bucket and lid, and as many sidings and passing loops as fit. Usually not
+     every piece can be placed: everything hangs off one main loop, and some pieces only fit particular spots.
    - Continuous running and features (station, sidings, passing loops) add to it. S-bends, warnings and unsupported joints
      count against it.
 

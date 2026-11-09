@@ -97,7 +97,10 @@ export function operationalChecks(cat: Catalog, pieces: PlacedPiece[], conn: Con
   for (const p of track) (groups.get(find(p.uid)) ?? groups.set(find(p.uid), []).get(find(p.uid))!).push(p.uid);
   const sortedGroups = [...groups.values()].sort((a, b) => b.length - a.length);
   const mainGroup = new Set(sortedGroups[0]);
-  for (const g of sortedGroups.slice(1))
+  // a free-standing piece with nothing joined to it (the bucket standing over track as a tunnel) isn't track a
+  // train should reach
+  const standing = (uid: string) => !!typeOf(uid).body && ![...conn.links.keys()].some((k) => k.startsWith(`${uid}:`));
+  for (const g of sortedGroups.slice(1).filter((g) => !(g.length === 1 && standing(g[0]))))
     add('disconnected', 'warning', `${g.length} piece${g.length > 1 ? 's are' : ' is'} not joined to the rest of the layout.`, g);
 
   // ------------------------------------------------------------------ state graph

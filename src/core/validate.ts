@@ -3,6 +3,7 @@ import type { Catalog } from './catalog';
 import { shortages, type Counts } from './inventory';
 import {
   computeConnectivity,
+  idlePorts,
   layoutBounds,
   pieceCounts,
   portKey,
@@ -226,6 +227,9 @@ export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: Valida
   const byUid = new Map(pieces.map((p) => [p.uid, p]));
 
   // ---- open ends, height steps, misalignment
+  // unused top track on a free-standing piece (the bucket used as a tunnel) isn't an open end, though ends that
+  // nearly meet it are still checked
+  const idle = idlePorts(cat, pieces, conn);
   const open = conn.open;
   const flagged = new Set<number>();
   for (let i = 0; i < open.length; i++) {
@@ -245,7 +249,7 @@ export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: Valida
     }
   }
   open.forEach((p, i) => {
-    if (flagged.has(i)) return;
+    if (flagged.has(i) || idle.has(portKey(p))) return;
     issues.push(issue('open-end', 'warning', `Open end on ${cat.get(byUid.get(p.uid)!.code).name}.`, [p.uid], p));
   });
 
