@@ -50,6 +50,22 @@ export function worldPorts(cat: Catalog, piece: PlacedPiece): WorldPort[] {
   });
 }
 
+/** Highest level a placed piece reaches: its highest track, or the top of its solid body (e.g. the bucket). */
+export function topLevel(cat: Catalog, piece: PlacedPiece): number {
+  const t = cat.get(piece.code);
+  const tracks = Math.max(0, ...t.samples.flat().map((s) => s.z));
+  return piece.z + Math.max(tracks, t.body?.zMax ?? 0);
+}
+
+/**
+ * Pieces in the order to draw them, lowest first, so higher track appears on top. Pieces are ordered by the
+ * highest point they reach rather than their base: the bucket stands on the floor but its crossing is at level 4.
+ */
+export function drawOrder(cat: Catalog, pieces: PlacedPiece[]): PlacedPiece[] {
+  const top = new Map(pieces.map((p) => [p.uid, topLevel(cat, p)]));
+  return [...pieces].sort((a, b) => top.get(a.uid)! - top.get(b.uid)! || a.z - b.z);
+}
+
 export function worldSamples(cat: Catalog, piece: PlacedPiece): Sample[][] {
   const t = cat.get(piece.code);
   return t.samples.map((path) =>
@@ -128,6 +144,38 @@ export function computeConnectivity(cat: Catalog, pieces: PlacedPiece[]): Connec
   }
   const open = ports.filter((p) => !links.has(portKey(p)));
   return { links, open, ports };
+}
+
+/**
+ * Ends of free-standing pieces (those with a solid body, like the bucket) that belong to a route nothing is joined
+ * to. The bucket can stand over your track as a tunnel without anything on top: its top track is then unused, not
+ * open ends a train could run off.
+ */
+export function idlePorts(cat: Catalog, pieces: PlacedPiece[], conn: Connectivity): Set<string> {
+  const idle = new Set<string>();
+  for (const p of pieces) {
+    const t = cat.get(p.code);
+    if (!t.body) continue;
+    const done = new Set<string>();
+    for (const port of t.ports) {
+      if (done.has(port.id)) continue;
+      // the ends joined to this one by a route through the piece
+      const group = new Set([port.id]);
+      const stack = [port.id];
+      while (stack.length) {
+        const id = stack.pop()!;
+        for (const next of t.routes[id] ?? [])
+          if (!group.has(next)) {
+            group.add(next);
+            stack.push(next);
+          }
+      }
+      group.forEach((id) => done.add(id));
+      if ([...group].every((id) => !conn.links.has(portKey({ uid: p.uid, port: id }))))
+        group.forEach((id) => idle.add(portKey({ uid: p.uid, port: id })));
+    }
+  }
+  return idle;
 }
 
 /** How many of each inventory item a set of pieces uses (alternate uses of one item share its code). */

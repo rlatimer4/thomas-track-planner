@@ -1,5 +1,16 @@
 import { memo } from 'react';
-import { LEVEL_COLORS, applyTransform, dirVec, worldPorts, worldSamples, type Catalog, type PlacedPiece, type Sample } from '../core';
+import {
+  LEVEL_COLORS,
+  applyTransform,
+  dirVec,
+  drawOrder,
+  worldPorts,
+  worldSamples,
+  type Catalog,
+  type PlacedPiece,
+  type Sample,
+  type SupportJoint,
+} from '../core';
 
 function pathD(pts: { x: number; y: number }[]): string {
   return pts.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join('');
@@ -59,6 +70,15 @@ export const TrackPiece = memo(function TrackPiece({ cat, piece, selected, probl
           strokeWidth={3}
         />
       )}
+      {t.bodyRect?.tunnel &&
+        [-1, 1].map((side) => {
+          const r = t.bodyRect!;
+          const y = side * r.tunnel!;
+          const a = applyTransform(piece, { x: r.x, y });
+          const b = applyTransform(piece, { x: r.x + r.w, y });
+          // dashed edges of the tunnel opening underneath
+          return <line key={side} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#64748b" strokeWidth={3} strokeDasharray="10 8" />;
+        })}
       {paths
         .map((s, i) => ({ s, i }))
         // draw the lowest paths first so a tunnel shows underneath the crossing
@@ -115,11 +135,16 @@ export function LayoutPreview({
   labels = false,
   showPorts = false,
   labelPorts = false,
+  supports,
+  improvised = false,
 }: {
   cat: Catalog;
   pieces: PlacedPiece[];
   size?: number;
   labels?: boolean;
+  /** Raised joints to mark with their supports. */
+  supports?: SupportJoint[];
+  improvised?: boolean;
   showPorts?: boolean;
   labelPorts?: boolean;
 }) {
@@ -129,12 +154,13 @@ export function LayoutPreview({
   const minY = Math.min(...pts.map((p) => p.y)) - pad;
   const maxX = Math.max(...pts.map((p) => p.x)) + pad;
   const maxY = Math.max(...pts.map((p) => p.y)) + pad;
-  const sorted = [...pieces].sort((a, b) => a.z - b.z);
+  const sorted = drawOrder(cat, pieces);
   return (
     <svg viewBox={`${minX} ${minY} ${maxX - minX} ${maxY - minY}`} width="100%" style={{ maxHeight: size }} role="img">
       {sorted.map((p) => (
         <TrackPiece key={p.uid} cat={cat} piece={p} labels={labels} />
       ))}
+      {supports && <SupportMarks joints={supports} scale={size / Math.max(1, maxX - minX)} labels={false} improvised={improvised} />}
       {showPorts &&
         pieces.flatMap((p) =>
           worldPorts(cat, p).map((wp) => {
@@ -154,5 +180,62 @@ export function LayoutPreview({
           }),
         )}
     </svg>
+  );
+}
+
+/** Marker under each raised joint: the supports placed there, a grey dot if it holds itself up, red if unsupported. */
+export function SupportMarks({
+  joints,
+  scale,
+  labels = true,
+  improvised = false,
+}: {
+  joints: SupportJoint[];
+  scale: number;
+  /** Text under each marker (off for small previews). */
+  labels?: boolean;
+  /** Joints without a support are to be propped up with something else: amber, not red. */
+  improvised?: boolean;
+}) {
+  const r = 9 / Math.max(scale, 0.3);
+  const font = 13 / Math.max(scale, 0.3);
+  return (
+    <g className="support-marks" pointerEvents="none">
+      {joints.map((j, i) => {
+        if (j.self) return <circle key={i} cx={j.x} cy={j.y} r={r * 0.55} fill="#94a3b8" stroke="#fff" strokeWidth={2 / scale} />;
+        const label = j.uses
+          ? Object.entries(j.uses)
+              .sort(([a], [b]) => (a === 'D1' ? 1 : b === 'D1' ? -1 : a.localeCompare(b)))
+              .map(([c, n]) => (n > 1 ? `${c}×${n}` : c))
+              .join(' + ')
+          : improvised
+            ? `L${j.level}: improvise`
+            : `L${j.level}: no support`;
+        const color = j.uses ? '#0284c7' : improvised ? '#d97706' : '#dc2626';
+        return (
+          <g key={i}>
+            <rect x={j.x - r} y={j.y - r} width={2 * r} height={2 * r} rx={r * 0.3} fill={color} stroke="#fff" strokeWidth={2 / scale} />
+            <text x={j.x} y={j.y} fontSize={r * 1.3} textAnchor="middle" dominantBaseline="central" fill="#fff" fontWeight={700}>
+              {j.uses ? j.level : '!'}
+            </text>
+            {labels && (
+              <text
+                x={j.x}
+                y={j.y + r + font * 0.9}
+                fontSize={font}
+                textAnchor="middle"
+                fill={color}
+                stroke="#fff"
+                strokeWidth={3 / scale}
+                paintOrder="stroke"
+                fontWeight={600}
+              >
+                {label}
+              </text>
+            )}
+          </g>
+        );
+      })}
+    </g>
   );
 }

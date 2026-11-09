@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BUILTIN_KITS,
+  bridgeCrossings,
   checkSpec,
   fromLegacyCustom,
   makeLayoutFile,
@@ -20,6 +21,10 @@ import {
   attachPose,
   closingWords,
   computeConnectivity,
+  findClosure,
+  piecePools,
+  countLoops,
+  drawOrder,
   generateLayouts,
   inventoryTotals,
   placeAt,
@@ -199,64 +204,110 @@ describe('elevation', () => {
     expect(validateLayout(cat, ramped).issues.some((i) => i.rule === 'switch-on-grade')).toBe(false);
   });
 
-  it('the bucket is a 4-way crossing at level 4 with a tunnel at ground level', () => {
-    const bucket = placeAt(cat, startPose(), 'BKT', 'e').ports;
-    for (const port of ['a', 'b', 'c', 'd']) expect(bucket.find((p) => p.port === port)!.z).toBe(4);
-    expect(bucket.find((p) => p.port === 'f')!.z).toBe(0);
-    expect(cat.get('BKT').routes.a).toEqual(['b']);
-    expect(cat.get('BKT').routes.c).toEqual(['d']);
+  it('the bucket is a 4-way crossing at level 4 and has no track of its own underneath', () => {
+    const t = cat.get('BKT');
+    expect(t.ports.map((p) => p.id).sort()).toEqual(['a', 'b', 'c', 'd']);
+    for (const p of t.ports) expect(p.z, p.id).toBe(4);
+    expect(t.routes.a).toEqual(['b']);
+    expect(t.routes.c).toEqual(['d']);
+    // attached by a top corner, it still stands on the floor
+    expect(placeAt(cat, startPose(), 'BKT', 'a').piece.z).toBe(0);
   });
 
   it('the bucket tracks run corner to corner 120° apart, and the tunnel bisects that angle', () => {
     const t = cat.get('BKT');
     const port = (id: string) => t.ports.find((p) => p.id === id)!;
     const S1 = cat.params.straight;
-    const half = (Math.sqrt(3) / 2) * S1;
-    // ends sit on the four corners of the footprint (tunnel axis = x, from 0 to one straight)
+    const half = (Math.sqrt(3) / 4) * S1;
+    const short = S1 / 2;
+    // ends sit on the four corners of the footprint (the tunnel runs along x, across the short side)
     for (const [id, x, y] of [
       ['a', 0, -half],
-      ['b', S1, half],
+      ['b', short, half],
       ['c', 0, half],
-      ['d', S1, -half],
+      ['d', short, -half],
     ] as const) {
       expect(port(id).x, id).toBeCloseTo(x);
       expect(port(id).y, id).toBeCloseTo(y);
     }
-    // heading of each top track (its far end faces the way the track runs)
+    // each top track is as long as a standard straight
+    expect(Math.hypot(port('b').x - port('a').x, port('b').y - port('a').y)).toBeCloseTo(S1);
+    expect(Math.hypot(port('d').x - port('c').x, port('d').y - port('c').y)).toBeCloseTo(S1);
+    // the top tracks are 120° apart and the tunnel (heading 0) bisects that angle
     const ab = port('b').dir;
     const cd = port('d').dir;
     expect(Math.abs(angleDiff(ab, cd))).toBeCloseTo(120);
-    // the tunnel runs along the bisector of the 120° angle
-    const tunnel = port('f').dir;
-    expect(Math.abs(angleDiff(ab, tunnel))).toBeCloseTo(60);
-    expect(Math.abs(angleDiff(cd, tunnel))).toBeCloseTo(60);
+    expect(Math.abs(angleDiff(ab, 0))).toBeCloseTo(60);
+    expect(Math.abs(angleDiff(cd, 0))).toBeCloseTo(60);
     // the solid body is the √3 : 1 footprint
     expect(t.bodyRect!.h / t.bodyRect!.w).toBeGreaterThan(1.5);
   });
 
+  it('a bucket standing over track as a tunnel has no open ends, is not disconnected and is not a bridge', () => {
+    const S1 = cat.params.straight;
+    const track = placeChain(cat, startPose(-S1 / 4, 0, 0), [S]).pieces;
+    const bucket: PlacedPiece = { uid: 'bucket', code: 'BKT', x: 0, y: 0, rot: 0, z: 0 };
+    const v = validateLayout(cat, [...track, bucket], { owned: { S1: 1, BKT: 1 } });
+    expect(v.issues.filter((i) => i.uids.includes('bucket')).map((i) => i.rule)).toEqual([]);
+    expect(v.counts.BKT).toBe(1);
+    expect(bridgeCrossings(cat, [...track, bucket])).toHaveLength(0);
+    // build onto its top and the rest of that top track counts as open again
+    const onTop = placeAt(
+      cat,
+      worldPorts(cat, bucket).find((p) => p.port === 'a')!,
+      'S1',
+      'a',
+    ).piece;
+    const v2 = validateLayout(cat, [...track, bucket, onTop]);
+    expect(v2.issues.some((i) => i.rule === 'open-end' && i.uids.includes('bucket'))).toBe(true);
+  });
+
+  it('pieces draw lowest first by the highest point they reach, so the bucket covers a ramp beside it', () => {
+    const bucket: PlacedPiece = { uid: 'bucket', code: 'BKT', x: 0, y: 0, rot: 0, z: 0 };
+    const ramp: PlacedPiece = { uid: 'ramp', code: 'AL', x: -100, y: 0, rot: 0, z: 0 };
+    const floor: PlacedPiece = { uid: 'floor', code: 'S1', x: -300, y: 0, rot: 0, z: 0 };
+    // added after the bucket, and on the same base, the ramp and the straight still draw underneath it
+    expect(drawOrder(cat, [bucket, ramp, floor]).map((p) => p.uid)).toEqual(['floor', 'ramp', 'bucket']);
+  });
+
   it('the lid and the bucket are separate pieces in the inventory', () => {
     const lid = placeAt(cat, startPose(0, 0, 0, 1), 'XB', 'a').piece;
-    const bucket = placeAt(cat, startPose(2000, 0), 'BKT', 'e').piece;
+    const bucket = placeAt(cat, startPose(2000, 0), 'BKT', 'a').piece;
     const v = validateLayout(cat, [lid, bucket], { owned: { XB: 1, BKT: 1 } });
     expect(v.counts).toEqual({ XB: 1, BKT: 1 });
     expect(v.issues.some((i) => i.rule === 'shortage')).toBe(false);
   });
 
-  it('ground track can pass through the bucket tunnel but not through its sides', () => {
-    const bucket = placeAt(cat, startPose(), 'BKT', 'e').piece;
+  it('the bucket stands over two tracks side by side, but not over track outside its tunnel', () => {
+    const bucket: PlacedPiece = { uid: 'bucket', code: 'BKT', x: 0, y: 0, rot: 0, z: 0 };
     const S1 = cat.params.straight;
-    // track joined to both tunnel mouths runs through underneath
-    const before = placeChain(cat, startPose(-S1, 0, 0), [S]).pieces;
-    const after = placeChain(cat, startPose(S1, 0, 0), [S]).pieces;
-    const v = validateLayout(cat, [bucket, ...before, ...after]);
-    expect(v.issues.some((i) => i.rule === 'overlap')).toBe(false);
-    expect(v.conn.links.size).toBe(4);
-    // straight running across the bucket sideways at ground level
-    const across = placeChain(cat, startPose(S1 / 2 + 30, -S1, 90), [S, S]).pieces;
-    expect(validateLayout(cat, [bucket, ...across]).issues.some((i) => i.rule === 'overlap')).toBe(true);
-    // the same at level 4 (on top) is fine only if it lines up with the lid; at level 2 it hits the bucket
-    const mid = placeChain(cat, startPose(S1 / 2 + 30, -S1, 90, 2), [S, S]).pieces;
-    expect(validateLayout(cat, [bucket, ...mid]).issues.some((i) => i.rule === 'overlap')).toBe(true);
+    const lane = cat.params.parallelSpacing;
+    const under = (y: number) => placeChain(cat, startPose(-S1 / 4, y, 0), [S]).pieces;
+    const overlaps = (pieces: PlacedPiece[]) => validateLayout(cat, [bucket, ...pieces]).issues.some((i) => i.rule === 'overlap');
+    // one track through the middle, or two tracks one lane apart, fit underneath
+    expect(overlaps(under(0))).toBe(false);
+    expect(overlaps([...under(-lane / 2), ...under(lane / 2)])).toBe(false);
+    // a third track, or a track a full lane off-centre, hits the tunnel's side walls
+    expect(overlaps([...under(-lane), ...under(0), ...under(lane)])).toBe(true);
+    expect(overlaps(under(lane))).toBe(true);
+    // track running across the bucket sideways hits it at ground level and at level 2
+    expect(overlaps(placeChain(cat, startPose(S1 / 4, -S1, 90), [S, S]).pieces)).toBe(true);
+    expect(overlaps(placeChain(cat, startPose(S1 / 4, -S1, 90, 2), [S, S]).pieces)).toBe(true);
+  });
+
+  it('records what holds up each raised joint, for drawing', () => {
+    // a straight one level up on two piers: each end has an RR1 under it
+    const span = placeChain(cat, startPose(0, 0, 0, 1), [S]).pieces;
+    const v = validateLayout(cat, span, { owned: { S1: 1, RR1: 2 } });
+    expect(v.supports.joints).toHaveLength(2);
+    for (const j of v.supports.joints) expect(j).toMatchObject({ level: 1, uses: { RR1: 1 } });
+    // with no supports owned the joints are still listed, without a support
+    const none = validateLayout(cat, span, { owned: { S1: 1 } });
+    expect(none.supports.joints.every((j) => !j.uses && !j.self)).toBe(true);
+    // AR1's rock base holds its own top joint
+    const rock = placeChain(cat, startPose(), [step('AR1'), S]).pieces;
+    const rv = validateLayout(cat, rock, { owned: { AR1: 1, S1: 1, RR1: 1 } });
+    expect(rv.supports.joints.filter((j) => j.self)).toHaveLength(1);
   });
 
   it('supports of each height are matched to raised joints', () => {
@@ -575,6 +626,132 @@ describe('autogen', () => {
       expect(v.issues.filter((i) => i.severity === 'error')).toEqual([]);
       expect(v.issues.filter((i) => i.rule === 'open-end')).toEqual([]);
       expect(v.running.onCycle.size).toBeGreaterThan(0);
+    }
+  }, 20000);
+
+  it('counts a bridge crossing wherever track passes over track with headroom, whichever piece is on top', () => {
+    const S1 = cat.params.straight;
+    const flat = placeChain(cat, startPose(-S1, 0, 0), [S, S]).pieces;
+    const over = (level: number) => placeChain(cat, startPose(0, -S1, 90, level), [S, S]).pieces;
+    expect(bridgeCrossings(cat, [...flat, ...over(2)])).toHaveLength(1);
+    // same crossing with the pieces listed the other way round
+    expect(bridgeCrossings(cat, [...over(2), ...flat])).toHaveLength(1);
+    // one level isn't enough headroom, so it isn't a bridge
+    expect(bridgeCrossings(cat, [...flat, ...over(1)])).toHaveLength(0);
+    expect(bridgeCrossings(cat, oval())).toHaveLength(0);
+  });
+
+  it('prefers layouts with bridges and height', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const res = generateLayouts(cat, { owned, timeBudgetMs: 3000, seed: 11, results: 5 });
+    expect(res.length).toBeGreaterThan(0);
+    expect(res.some((c) => c.breakdown['Bridge crossings'] > 0)).toBe(true);
+    expect(res[0].breakdown['Height']).toBeGreaterThan(0);
+    for (const c of res) expect(c.breakdown['Compact']).toBeGreaterThan(0);
+  }, 20000);
+
+  it('uses more of the pieces when asked to use all of them', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const avg = (useAll: boolean) => {
+      const res = generateLayouts(cat, { owned, timeBudgetMs: 2500, seed: 5, results: 4, useAll });
+      return res.reduce((a, c) => a + c.pieces.length, 0) / Math.max(1, res.length);
+    };
+    expect(avg(true)).toBeGreaterThan(avg(false));
+  }, 20000);
+
+  it('climbs to level 4 and runs over the top of the bucket, and uses the lid forks as track', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const res = generateLayouts(cat, { owned, timeBudgetMs: 3000, seed: 1, results: 8, useAll: true, improvisedSupports: true });
+    const features = res.flatMap((c) => c.features);
+    expect(features).toContain('Runs over the top of the track bucket');
+    expect(features.some((f) => /Balloon loop on the bucket lid|Second loop from the bucket lid fork/.test(f))).toBe(true);
+    for (const c of res) {
+      expect(c.issues.filter((i) => i.severity === 'error')).toEqual([]);
+      // over the bucket means a bucket top track is joined at both ends
+      if (c.features.includes('Runs over the top of the track bucket')) {
+        const b = c.pieces.find((p) => p.code === 'BKT')!;
+        const conn = computeConnectivity(cat, c.pieces);
+        expect(['a', 'b', 'c', 'd'].filter((q) => conn.links.has(`${b.uid}:${q}`))).toHaveLength(2);
+      }
+    }
+  }, 20000);
+
+  it('can use the bucket, the lid and a second loop', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const res = generateLayouts(cat, { owned, timeBudgetMs: 3000, seed: 2, results: 8, useAll: true, improvisedSupports: true });
+    const features = res.flatMap((c) => c.features);
+    const uses = (code: string) => res.some((c) => c.pieces.some((p) => p.code === code));
+    expect(uses('BKT') || uses('XB') || features.includes('Second loop through the middle')).toBe(true);
+    for (const c of res) expect(c.issues.filter((i) => i.severity === 'error')).toEqual([]);
+  }, 20000);
+
+  it('counts independent loops, treating separate routes through one piece separately', () => {
+    expect(countLoops(cat, oval())).toBe(1);
+    // an oval with an offset-switch double-track section is 2 loops
+    const ring = placeChain(cat, startPose(), [step('PR'), S, step('PL', 'rev'), R, R, R, S, S, S, R, R, R]).pieces;
+    const lane = placeChain(
+      cat,
+      worldPorts(cat, ring[0]).find((p) => p.port === 'c')!,
+      [S],
+    ).pieces;
+    const all = [...ring, ...lane];
+    expect(validateLayout(cat, all).issues.filter((i) => i.rule === 'open-end')).toEqual([]);
+    expect(countLoops(cat, all)).toBe(2);
+  });
+
+  it('builds layouts with several loops when asked for many loops', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const res = generateLayouts(cat, { owned, timeBudgetMs: 3000, seed: 1, results: 4, manyLoops: true });
+    expect(res.length).toBeGreaterThan(0);
+    expect(Math.max(...res.map((c) => countLoops(cat, c.pieces)))).toBeGreaterThanOrEqual(3);
+    for (const c of res) expect(c.issues.filter((i) => i.severity === 'error')).toEqual([]);
+  }, 20000);
+
+  it('finds exact track between two open ends, climbing when they are at different levels', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const pools = piecePools(cat);
+    // close half an oval
+    const half = placeChain(cat, startPose(), [R, R, R]).pieces;
+    const a = worldPorts(cat, half[0]).find((p) => p.port === 'a')!;
+    const b = worldPorts(cat, half[2]).find((p) => p.port === 'b')!;
+    const shut = findClosure(cat, pools, b, a, owned)[0];
+    expect(shut).toBeDefined();
+    const v = validateLayout(cat, [...half, ...shut.pieces]);
+    expect(v.issues.filter((i) => i.rule === 'open-end' || i.severity === 'error')).toEqual([]);
+    // reach an end two levels up
+    const route = placeChain(cat, startPose(), [S, step('AL'), S, step('AL'), S, R]);
+    const top = worldPorts(cat, placeAt(cat, route.end, 'S1', 'a').piece).find((p) => p.port === 'a')!;
+    const climb = findClosure(cat, pools, startPose(), top, owned)[0];
+    expect(climb).toBeDefined();
+    const ramps = Object.entries(climb.used).filter(([c]) => cat.get(c).category === 'ramp');
+    expect(ramps.reduce((n, [, k]) => n + k, 0)).toBeGreaterThanOrEqual(2);
+    // nothing to reach with no pieces
+    expect(findClosure(cat, pools, b, a, {})).toEqual([]);
+  });
+
+  it('branching method closes every fork into a loop', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const res = generateLayouts(cat, { owned, timeBudgetMs: 3000, seed: 3, results: 5, method: 'branching' });
+    expect(res.length).toBeGreaterThan(0);
+    for (const c of res) {
+      // no buffer stops: every fork was closed
+      expect(c.pieces.some((p) => cat.get(p.code).category === 'buffer')).toBe(false);
+      expect(c.issues.filter((i) => i.rule === 'open-end' || i.severity === 'error')).toEqual([]);
+    }
+    expect(Math.max(...res.map((c) => countLoops(cat, c.pieces)))).toBeGreaterThanOrEqual(2);
+  }, 20000);
+
+  it('only offers layouts your supports can hold, unless improvising', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const strict = generateLayouts(cat, { owned, timeBudgetMs: 2500, seed: 4, results: 5 });
+    for (const c of strict) {
+      expect(c.supports.every((j) => j.self || j.uses)).toBe(true);
+      expect(validateLayout(cat, c.pieces, { owned }).supports.unsupported).toEqual({});
+    }
+    const loose = generateLayouts(cat, { owned, timeBudgetMs: 2500, seed: 4, results: 5, improvisedSupports: true });
+    for (const c of loose) {
+      const n = c.supports.filter((j) => !j.self && !j.uses).length;
+      if (n) expect(c.features.some((f) => f.includes('improvised supports'))).toBe(true);
     }
   }, 20000);
 

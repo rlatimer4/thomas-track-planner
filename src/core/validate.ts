@@ -3,6 +3,7 @@ import type { Catalog } from './catalog';
 import { shortages, type Counts } from './inventory';
 import {
   computeConnectivity,
+  idlePorts,
   layoutBounds,
   pieceCounts,
   portKey,
@@ -31,6 +32,18 @@ export interface SupportPlan {
   used: Counts;
   /** Joints that could not be supported with owned pieces, by level. */
   unsupported: Record<number, number>;
+  /** Every raised joint and what holds it up, for drawing. */
+  joints: SupportJoint[];
+}
+
+export interface SupportJoint {
+  x: number;
+  y: number;
+  level: number;
+  /** Held by a piece that stands on its own (the bucket, the lid, AR1's rock base, the bridge). */
+  self?: boolean;
+  /** Support pieces placed under this joint, when the plan found some. */
+  uses?: Counts;
 }
 
 export interface ValidationResult {
@@ -106,6 +119,7 @@ const issue = (rule: string, severity: Severity, message: string, uids: string[]
 export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connectivity, owned?: Counts): SupportPlan {
   const byUid = new Map(pieces.map((p) => [p.uid, p]));
   const needed: Record<number, number> = {};
+  const joints: SupportJoint[] = [];
   const seen = new Set<string>();
   for (const port of conn.ports) {
     const k = portKey(port);
@@ -121,8 +135,13 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
       return !!t.selfSupporting || !!t.supportedPorts?.includes(portId);
     };
     const selfSupported = holds(port.uid, port.port) || holds(mate?.uid, mate?.port);
-    if (selfSupported) continue;
+    if (selfSupported) {
+      // only joints track actually uses (not the bucket's unused top)
+      if (mate) joints.push({ x: port.x, y: port.y, level, self: true });
+      continue;
+    }
     needed[level] = (needed[level] ?? 0) + 1;
+    joints.push({ x: port.x, y: port.y, level });
   }
   // supports that hold several joints (the bridge holds both ends of a straight) count once per joint
   const held = (code: string) => (cat.has(code) ? (cat.get(code).jointsHeld ?? 1) : 1);
@@ -133,7 +152,7 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
   const levels = Object.keys(needed)
     .map(Number)
     .sort((x, y) => y - x);
-  if (!owned) return { needed, used, unsupported };
+  if (!owned) return { needed, used, unsupported, joints };
 
   // Supports stack: a column of support pieces whose levels add up to the joint's level.
   // Paired supports (RS1/RS2/RS3) stack, and need two columns plus a D1 deck. Piers (RR1) stand alone
@@ -183,6 +202,7 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
   const size = (c: Counts) => Object.values(c).reduce((x, y) => x + y, 0);
 
   for (const level of levels) {
+    const atLevel = joints.filter((j) => !j.self && j.level === level);
     for (let i = 0; i < needed[level]; i++) {
       const options: Counts[] = [];
       const one = column(single, avail, level);
@@ -206,10 +226,11 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
         avail[c] -= n;
         usedJoints[c] = (usedJoints[c] ?? 0) + n;
       }
+      atLevel[i].uses = choice;
     }
   }
   for (const [c, n] of Object.entries(usedJoints)) used[c] = Math.ceil(n / held(c));
-  return { needed, used, unsupported };
+  return { needed, used, unsupported, joints };
 }
 
 export interface ValidateOptions {
@@ -217,6 +238,11 @@ export interface ValidateOptions {
   owned?: Counts;
   /** Available floor/table space in mm; when given, the footprint is checked against it. */
   space?: { width: number; depth: number };
+  /**
+   * Skip how trains run (loops, reachability, conflicts…): only the shape checks (overlaps, heights, joints, open
+   * ends, supports, design rules). Much faster; used while building layouts automatically.
+   */
+  quick?: boolean;
 }
 
 export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: ValidateOptions = {}): ValidationResult {
@@ -226,6 +252,9 @@ export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: Valida
   const byUid = new Map(pieces.map((p) => [p.uid, p]));
 
   // ---- open ends, height steps, misalignment
+  // unused top track on a free-standing piece (the bucket used as a tunnel) isn't an open end, though ends that
+  // nearly meet it are still checked
+  const idle = idlePorts(cat, pieces, conn);
   const open = conn.open;
   const flagged = new Set<number>();
   for (let i = 0; i < open.length; i++) {
@@ -245,7 +274,7 @@ export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: Valida
     }
   }
   open.forEach((p, i) => {
-    if (flagged.has(i)) return;
+    if (flagged.has(i) || idle.has(portKey(p))) return;
     issues.push(issue('open-end', 'warning', `Open end on ${cat.get(byUid.get(p.uid)!.code).name}.`, [p.uid], p));
   });
 
@@ -372,9 +401,11 @@ export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: Valida
   }
 
   // ---- running analysis
-  const running = analyzeRunning(cat, pieces, conn);
+  const running: RunAnalysis = opts.quick
+    ? { canRunForever: new Set(), onCycle: new Set(), loopPieces: new Set(), hasReversingLoop: false, loopCount: 0 }
+    : analyzeRunning(cat, pieces, conn);
   const trackPieces = pieces.filter((p) => cat.get(p.code).isTrack);
-  if (trackPieces.length > 0 && running.onCycle.size === 0) {
+  if (!opts.quick && trackPieces.length > 0 && running.onCycle.size === 0) {
     issues.push(issue('no-loop', 'warning', 'There is no closed loop, so engines will always reach an end.', []));
   }
   if (running.onCycle.size > 0) {
@@ -395,7 +426,7 @@ export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: Valida
   }
 
   // ---- how trains run: turning, reachability, conflicts, siding lengths, stops, disconnected track
-  issues.push(...operationalChecks(cat, pieces, conn));
+  if (!opts.quick) issues.push(...operationalChecks(cat, pieces, conn));
 
   // ---- footprint against the available space
   if (opts.space && trackPieces.length) {

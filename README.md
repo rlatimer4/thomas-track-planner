@@ -17,8 +17,8 @@ the design logic has no platform dependencies, so the same code can later ship a
 
 | Tab | What it does |
 | --- | --- |
-| **Build** | Tap a piece in the palette to add it. New pieces attach to the selected (orange) open end, and the next end is selected automatically, so you can keep tapping. **Turn** (or `F`) re-attaches the last piece the other way: a curve turns left instead of right, a ramp goes down instead of up, a switch is entered by a different leg. Tap a green end to build from it. Drag a piece to move it; it snaps when an end comes near another. `R` rotates, `Del` removes, `Ctrl+Z`/`Ctrl+Shift+Z` undo and redo. |
-| **Auto design** | Choose a shape (any, loops only, figure-8), the features you want (sidings, station, hills) and, optionally, the space you have. It generates and ranks layouts. Hover the score to see how it was worked out. **Open in builder** to edit one. |
+| **Build** | Tap a piece in the palette to add it. New pieces attach to the selected (orange) open end, and the next end is selected automatically, so you can keep tapping. **Turn** (or `F`) re-attaches the last piece the other way: a curve turns left instead of right, a ramp goes down instead of up, a switch is entered by a different leg. Tap a green end to build from it. Drag a piece to move it; it snaps when an end comes near another. To work on several pieces, Shift+drag a box around them (or turn on **Select** and drag), Shift+click to add or remove one, or `Ctrl+A` for all; then drag, rotate, raise or remove them together. `R` rotates, `Del` removes, `Ctrl+Z`/`Ctrl+Shift+Z` undo and redo. |
+| **Auto design** | Choose a shape (any, loops only, figure-8), the features you want (sidings, station, hills), whether to use all your pieces and, optionally, the space you have. It generates and ranks layouts. Hover the score to see how it was worked out. **Open in builder** to edit one. |
 | **My track** | Set how many of each kit you own, or adjust loose pieces with + / − (negative numbers record lost pieces). You can also define your own kits. |
 | **Catalog** | Every piece with its ends and paths. Add, edit, copy and share custom pieces and kits. See [Adding new track pieces](docs/ADDING_PIECES.md). |
 | **Settings** | Units (cm/in); your space; trains (engines running at once, longest train, engine width, headroom, how switches behave); track geometry calibration. |
@@ -40,7 +40,9 @@ The **Checks** panel updates as you build. Hover or tap a check to highlight the
 | Doesn't fit your space | The layout is bigger than the space set in Settings (it says if turning it 90° would fit) |
 | Shortages, supports, S-bends, switches on ramps, long climbs, dead-end sections | Pieces and supports you don't have, and track design rules |
 
-**Parts** shows a bill of materials, including the supports needed for raised track. **Footprint** draws the area the layout
+**Parts** shows a bill of materials, including the supports needed for raised track. With **Supports** ticked, each
+raised joint is marked on the canvas: blue with the supports placed under it (for example `RS2×2 + D1` or `RR1`), a grey
+dot if a piece holds it up itself (the lid, the bucket, AR1's rock base), or red if none of your supports can hold it. **Footprint** draws the area the layout
 covers with its width and depth, next to your space if you've set one. The exported SVG includes the footprint too.
 
 Layouts and inventory are saved automatically on the device. **Export/Import** moves layouts as `.track.json` files, and **SVG**
@@ -75,12 +77,12 @@ Height is counted in **levels**. Ground is level 0, and each support height is o
 | `RR1` | Rock-style pier for level 1. Stands on its own; does not stack |
 | `RS1`, `RS2`, `RS3` | Supports for levels 1, 2 and 3. Used in pairs (one column each side) with a `D1` deck under the joint. They stack: two `RS1` equal one `RS2`, and `RS2` + `RS1` reach level 3 |
 | `XB` | Bucket lid: a 3-way fork (left, straight, right) standing one level up on its own legs. Ramp up to it |
-| `BKT` | Track bucket, turned over: two tracks cross corner to corner on its bottom at level 4, 120° apart, and a ground-level tunnel runs underneath along the line bisecting that 120° angle |
+| `BKT` | Track bucket, turned over (with nothing joined on top it is just a tunnel, so its top ends aren't open ends): two tracks cross corner to corner on its bottom at level 4, 120° apart, and a tunnel underneath, along the line bisecting that 120° angle, lets it stand over two of your own ground tracks side by side (it has no track of its own) |
 | `VB` | Vicarstown lift bridge: carries a straight at level 2, holding both of its ends, so track can pass underneath |
 
 How it's checked:
 - Joints connect only at the same level; otherwise it's a **height mismatch**.
-- Track may cross over other track that's at least two levels lower, which is the headroom an engine needs (configurable). The bucket is solid, so track can't pass
+- Track may cross over other track that's at least two levels lower, which is the headroom an engine needs (configurable). The bucket is solid apart from its tunnel, so track can't pass
   through its sides at any height below its top.
 - Every raised joint needs supports stacked to its height unless a self-supporting piece (`AR1`'s top, the bridge, the lid,
   the bucket) holds it. For each joint the planner picks the combination using the fewest pieces you own: an `RR1` pier (level 1 only),
@@ -134,9 +136,39 @@ has no "What's Included" list, the kit is counted from the labelled pieces in it
    Raised straights use support-tab pieces (`TU4`, `ES3`, `CU4`) when available.
 3. **Decoration.** Straights on the finished loop are swapped for same-length pieces: offset-switch double track, the two-lane
    station, passing loops (switch pairs joined by a short search for connecting track) and sidings ending in buffer stops.
-4. **Checking and ranking.** Every candidate goes through the same validator as the builder and is scored on: pieces used,
-   continuous running, features, elevation and crossings. S-bends, warnings and unsupported joints count against it. Results are
-   de-duplicated, and the shapes are varied.
+   It can also add:
+   - a **second loop**: switches on two different sides of the loop, joined by a track through the middle. **Many loops**
+     builds a plain oval with long sides and adds as many of these as the switches allow (the station's double track is
+     a loop too); every result says how many loops it has, and each loop beyond the first adds to the score;
+   - the **bucket lid** in place of a straight at level 1, with its side forks as track: a balloon loop joining its left
+     and right forks, or one fork running to a switch on another level-1 straight. Failing that, its legs end in buffers;
+   - the **bucket**: when you own it and enough ramps, the loop sometimes climbs steadily to level 4 and runs over one of
+     its top tracks. Otherwise it stands over a ground-level straight so trains run through its tunnel.
+   **Branching method** (the default; pick **Classic** for the above). Instead of decorating the main loop, it grows
+   forks off straights anywhere in the layout (including earlier branches) and keeps a fork only when exact track
+   closes it back into the layout, so every fork forms a loop and there are no unused forks. The lid's two side forks
+   are closed the same way: a balloon loop between them, or each into the layout. The track is found exactly
+   (`src/core/closure.ts`): every point is a whole number of straights plus a whole number of curve chords, and the
+   two don't divide into each other, so a path closes only when its curves cover the curve part of the gap and its
+   straights the rest. That rules out impossible joins by arithmetic, and lets a path climb to reach another level.
+
+   **Supports.** Only layouts your supports can hold are offered. Tick **Improvised supports** to allow raised joints
+   you'll prop up with something else; those cost 2 points each, and each result says how many it has. Result
+   previews mark every raised joint like the builder does.
+4. **Checking and ranking.** Every candidate goes through the same validator as the builder and is scored. Interesting,
+   compact layouts rank highest:
+   - **Bridge crossings** score most: 30 points for each place track passes over other track with enough headroom (up to 3).
+   - **Height:** 10 points per level the layout climbs to, plus up to 30 for how much of the track is raised.
+   - **Compact:** up to 45 points for how densely the track fills its footprint.
+   - **Pieces used:** up to 60 points, by the share of your track the layout uses. Each result says how many it uses.
+     **Use all my pieces** makes this count for up to 250 and builds bigger layouts: the longest loops, extra
+     straights, every climb, a second loop, the bucket and lid, and as many sidings and passing loops as fit. Usually not
+     every piece can be placed: everything hangs off one main loop, and some pieces only fit particular spots.
+   - Continuous running and features (station, sidings, passing loops) add to it. S-bends, warnings and unsupported joints
+     count against it. A long climb (ramps back to back, as the bucket sets climb) costs only 2 points.
+
+   Figure-8s and hills are tried often so there are plenty to choose from. Results are de-duplicated, and the shapes are
+   varied. Hover a result's score to see its breakdown. The weights are `SCORE_WEIGHTS` in `src/core/autogen.ts`.
 
 The railroad rules it follows: continuous running on a closed main loop, no open ends (sidings end in buffers), crossings only with
 grade separation, gentle grades and no switches on ramps, straights between opposite curves where possible, passing places so two

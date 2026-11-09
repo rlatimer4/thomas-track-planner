@@ -7,8 +7,9 @@ import type { PathDef, PieceSpec } from './catalog';
 import { TRACK_STANDARD } from './standards';
 
 const A = TRACK_STANDARD.curveAngle; // 60°
-/** Half the long side of the track bucket, in straights (√3/2: its corner-to-corner tracks are 120° apart). */
-const BUCKET_HALF = Math.sqrt(3) / 2;
+/** Track bucket footprint, in straights: its corner-to-corner top tracks are one straight long and 120° apart. */
+const BUCKET_SHORT = 0.5; // sin 30°: the side the tunnel crosses
+const BUCKET_HALF = Math.sqrt(3) / 4; // half of the long side (cos 30° / 2)
 
 const through: PathDef = { from: 'a', to: 'b' }; // one standard straight
 const curve: PathDef = { from: 'a', to: 'b', turn: A }; // one standard curve (right when entered at a)
@@ -190,18 +191,17 @@ const CURRENT_PIECES: PieceSpec[] = [
     name: 'Track bucket (crossing + tunnel)',
     category: 'crossing',
     description:
-      'The storage bucket turned over: on its bottom (level 4) two tracks cross corner to corner with 120° between them, and a ground-level tunnel runs underneath along the line bisecting that 120° angle. Track can’t pass through its sides.',
+      'The storage bucket turned over: on its bottom (level 4) two tracks cross corner to corner with 120° between them. A tunnel underneath, along the line bisecting that 120° angle, lets the bucket stand over your own ground track: it fits two tracks side by side. Track can’t pass through its sides.',
     color: '#9ca3af',
     selfSupporting: true,
     approximate: true,
-    // Corner-to-corner tracks 120° apart need a footprint √3 times as long as it is wide. The tunnel
-    // (e→f, one straight) crosses the short way; the top tracks run between opposite corners, 2 straights each.
+    // Each top track is one straight running between opposite corners, 120° from the other, so the footprint is
+    // √3 times as long as it is wide. The tunnel crosses the short way and has no track of its own.
     paths: [
-      { from: 'a', to: 'b', length: 2, level: 4, start: { side: -BUCKET_HALF, heading: 60 } },
-      { from: 'c', to: 'd', length: 2, level: 4, start: { side: BUCKET_HALF, heading: -60 } },
-      { from: 'e', to: 'f' },
+      { from: 'a', to: 'b', level: 4, start: { side: -BUCKET_HALF, heading: 60 } },
+      { from: 'c', to: 'd', level: 4, start: { side: BUCKET_HALF, heading: -60 } },
     ],
-    body: { along: 0, side: -BUCKET_HALF, length: 1, width: 2 * BUCKET_HALF, zMin: 0, zMax: 4, tunnel: true },
+    body: { along: 0, side: -BUCKET_HALF, length: BUCKET_SHORT, width: 2 * BUCKET_HALF, zMin: 0, zMax: 4, tunnel: 2 },
   },
 
   // ------------------------------------------------------------------ supports (counted against raised joints, not placed)
