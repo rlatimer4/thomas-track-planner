@@ -31,6 +31,8 @@ export function AutoView({ onOpen }: { onOpen: () => void }) {
   const [station, setStation] = useState(true);
   const [useAll, setUseAll] = useState(false);
   const [manyLoops, setManyLoops] = useState(false);
+  const [method, setMethod] = useState<'classic' | 'branching'>('branching');
+  const [improvised, setImprovised] = useState(false);
   const [seconds, setSeconds] = useState(3);
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<Candidate[] | null>(null);
@@ -53,6 +55,8 @@ export function AutoView({ onOpen }: { onOpen: () => void }) {
       wantStation: station,
       useAll,
       manyLoops,
+      method,
+      improvisedSupports: improvised,
       maxWidth: limit ? parseLen(w, units) : undefined,
       maxDepth: limit ? parseLen(d, units) : undefined,
       results: 8,
@@ -92,6 +96,13 @@ export function AutoView({ onOpen }: { onOpen: () => void }) {
               <option value="figure8">Figure-8 (crosses over itself)</option>
             </select>
           </label>
+          <label title="Branching grows forks anywhere and keeps one only when track closes it back into the layout, so every fork forms a loop. Classic adds stations, passing loops and sidings to the main loop.">
+            Method
+            <select value={method} onChange={(e) => setMethod(e.target.value as 'classic' | 'branching')}>
+              <option value="branching">Branching (closes every fork)</option>
+              <option value="classic">Classic</option>
+            </select>
+          </label>
           <label className="check">
             <input type="checkbox" checked={sidings} onChange={(e) => setSidings(e.target.checked)} /> Sidings & passing loops
           </label>
@@ -112,6 +123,12 @@ export function AutoView({ onOpen }: { onOpen: () => void }) {
             title="Use as many of your pieces as fit: the biggest loops, every climb, and as many sidings and passing loops as possible."
           >
             <input type="checkbox" checked={useAll} onChange={(e) => setUseAll(e.target.checked)} /> Use all my pieces
+          </label>
+          <label
+            className="check"
+            title="Allow raised joints your supports can't hold, to prop up with something else (blocks, books). Without it, only layouts your supports can hold are offered."
+          >
+            <input type="checkbox" checked={improvised} onChange={(e) => setImprovised(e.target.checked)} /> Improvised supports
           </label>
           <label className="check">
             <input type="checkbox" checked={limit} onChange={(e) => setLimit(e.target.checked)} /> Fit in a space
@@ -145,7 +162,7 @@ export function AutoView({ onOpen }: { onOpen: () => void }) {
           <div className="results">
             {results.map((c, i) => (
               <div key={i} className="card result">
-                <LayoutPreview cat={cat} pieces={c.pieces} size={220} />
+                <LayoutPreview cat={cat} pieces={c.pieces} size={220} supports={c.supports} improvised={improvised} />
                 <div className="result-head">
                   <strong>{c.name}</strong>
                   <span

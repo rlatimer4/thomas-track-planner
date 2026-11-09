@@ -21,6 +21,8 @@ import {
   attachPose,
   closingWords,
   computeConnectivity,
+  findClosure,
+  piecePools,
   countLoops,
   drawOrder,
   generateLayouts,
@@ -659,7 +661,7 @@ describe('autogen', () => {
 
   it('climbs to level 4 and runs over the top of the bucket, and uses the lid forks as track', () => {
     const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
-    const res = generateLayouts(cat, { owned, timeBudgetMs: 3000, seed: 1, results: 8, useAll: true });
+    const res = generateLayouts(cat, { owned, timeBudgetMs: 3000, seed: 1, results: 8, useAll: true, improvisedSupports: true });
     const features = res.flatMap((c) => c.features);
     expect(features).toContain('Runs over the top of the track bucket');
     expect(features.some((f) => /Balloon loop on the bucket lid|Second loop from the bucket lid fork/.test(f))).toBe(true);
@@ -676,7 +678,7 @@ describe('autogen', () => {
 
   it('can use the bucket, the lid and a second loop', () => {
     const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
-    const res = generateLayouts(cat, { owned, timeBudgetMs: 3000, seed: 2, results: 8, useAll: true });
+    const res = generateLayouts(cat, { owned, timeBudgetMs: 3000, seed: 2, results: 8, useAll: true, improvisedSupports: true });
     const features = res.flatMap((c) => c.features);
     const uses = (code: string) => res.some((c) => c.pieces.some((p) => p.code === code));
     expect(uses('BKT') || uses('XB') || features.includes('Second loop through the middle')).toBe(true);
@@ -703,6 +705,54 @@ describe('autogen', () => {
     expect(res.length).toBeGreaterThan(0);
     expect(Math.max(...res.map((c) => countLoops(cat, c.pieces)))).toBeGreaterThanOrEqual(3);
     for (const c of res) expect(c.issues.filter((i) => i.severity === 'error')).toEqual([]);
+  }, 20000);
+
+  it('finds exact track between two open ends, climbing when they are at different levels', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const pools = piecePools(cat);
+    // close half an oval
+    const half = placeChain(cat, startPose(), [R, R, R]).pieces;
+    const a = worldPorts(cat, half[0]).find((p) => p.port === 'a')!;
+    const b = worldPorts(cat, half[2]).find((p) => p.port === 'b')!;
+    const shut = findClosure(cat, pools, b, a, owned)[0];
+    expect(shut).toBeDefined();
+    const v = validateLayout(cat, [...half, ...shut.pieces]);
+    expect(v.issues.filter((i) => i.rule === 'open-end' || i.severity === 'error')).toEqual([]);
+    // reach an end two levels up
+    const route = placeChain(cat, startPose(), [S, step('AL'), S, step('AL'), S, R]);
+    const top = worldPorts(cat, placeAt(cat, route.end, 'S1', 'a').piece).find((p) => p.port === 'a')!;
+    const climb = findClosure(cat, pools, startPose(), top, owned)[0];
+    expect(climb).toBeDefined();
+    const ramps = Object.entries(climb.used).filter(([c]) => cat.get(c).category === 'ramp');
+    expect(ramps.reduce((n, [, k]) => n + k, 0)).toBeGreaterThanOrEqual(2);
+    // nothing to reach with no pieces
+    expect(findClosure(cat, pools, b, a, {})).toEqual([]);
+  });
+
+  it('branching method closes every fork into a loop', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const res = generateLayouts(cat, { owned, timeBudgetMs: 3000, seed: 3, results: 5, method: 'branching' });
+    expect(res.length).toBeGreaterThan(0);
+    for (const c of res) {
+      // no buffer stops: every fork was closed
+      expect(c.pieces.some((p) => cat.get(p.code).category === 'buffer')).toBe(false);
+      expect(c.issues.filter((i) => i.rule === 'open-end' || i.severity === 'error')).toEqual([]);
+    }
+    expect(Math.max(...res.map((c) => countLoops(cat, c.pieces)))).toBeGreaterThanOrEqual(2);
+  }, 20000);
+
+  it('only offers layouts your supports can hold, unless improvising', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const strict = generateLayouts(cat, { owned, timeBudgetMs: 2500, seed: 4, results: 5 });
+    for (const c of strict) {
+      expect(c.supports.every((j) => j.self || j.uses)).toBe(true);
+      expect(validateLayout(cat, c.pieces, { owned }).supports.unsupported).toEqual({});
+    }
+    const loose = generateLayouts(cat, { owned, timeBudgetMs: 2500, seed: 4, results: 5, improvisedSupports: true });
+    for (const c of loose) {
+      const n = c.supports.filter((j) => !j.self && !j.uses).length;
+      if (n) expect(c.features.some((f) => f.includes('improvised supports'))).toBe(true);
+    }
   }, 20000);
 
   it('respects the space limit', () => {

@@ -144,6 +144,17 @@ has no "What's Included" list, the kit is counted from the labelled pieces in it
      and right forks, or one fork running to a switch on another level-1 straight. Failing that, its legs end in buffers;
    - the **bucket**: when you own it and enough ramps, the loop sometimes climbs steadily to level 4 and runs over one of
      its top tracks. Otherwise it stands over a ground-level straight so trains run through its tunnel.
+   **Branching method** (the default; pick **Classic** for the above). Instead of decorating the main loop, it grows
+   forks off straights anywhere in the layout (including earlier branches) and keeps a fork only when exact track
+   closes it back into the layout, so every fork forms a loop and there are no unused forks. The lid's two side forks
+   are closed the same way: a balloon loop between them, or each into the layout. The track is found exactly
+   (`src/core/closure.ts`): every point is a whole number of straights plus a whole number of curve chords, and the
+   two don't divide into each other, so a path closes only when its curves cover the curve part of the gap and its
+   straights the rest. That rules out impossible joins by arithmetic, and lets a path climb to reach another level.
+
+   **Supports.** Only layouts your supports can hold are offered. Tick **Improvised supports** to allow raised joints
+   you'll prop up with something else; those cost 2 points each, and each result says how many it has. Result
+   previews mark every raised joint like the builder does.
 4. **Checking and ranking.** Every candidate goes through the same validator as the builder and is scored. Interesting,
    compact layouts rank highest:
    - **Bridge crossings** score most: 30 points for each place track passes over other track with enough headroom (up to 3).

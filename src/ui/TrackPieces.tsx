@@ -9,6 +9,7 @@ import {
   type Catalog,
   type PlacedPiece,
   type Sample,
+  type SupportJoint,
 } from '../core';
 
 function pathD(pts: { x: number; y: number }[]): string {
@@ -134,11 +135,16 @@ export function LayoutPreview({
   labels = false,
   showPorts = false,
   labelPorts = false,
+  supports,
+  improvised = false,
 }: {
   cat: Catalog;
   pieces: PlacedPiece[];
   size?: number;
   labels?: boolean;
+  /** Raised joints to mark with their supports. */
+  supports?: SupportJoint[];
+  improvised?: boolean;
   showPorts?: boolean;
   labelPorts?: boolean;
 }) {
@@ -154,6 +160,7 @@ export function LayoutPreview({
       {sorted.map((p) => (
         <TrackPiece key={p.uid} cat={cat} piece={p} labels={labels} />
       ))}
+      {supports && <SupportMarks joints={supports} scale={size / Math.max(1, maxX - minX)} labels={false} improvised={improvised} />}
       {showPorts &&
         pieces.flatMap((p) =>
           worldPorts(cat, p).map((wp) => {
@@ -173,5 +180,62 @@ export function LayoutPreview({
           }),
         )}
     </svg>
+  );
+}
+
+/** Marker under each raised joint: the supports placed there, a grey dot if it holds itself up, red if unsupported. */
+export function SupportMarks({
+  joints,
+  scale,
+  labels = true,
+  improvised = false,
+}: {
+  joints: SupportJoint[];
+  scale: number;
+  /** Text under each marker (off for small previews). */
+  labels?: boolean;
+  /** Joints without a support are to be propped up with something else: amber, not red. */
+  improvised?: boolean;
+}) {
+  const r = 9 / Math.max(scale, 0.3);
+  const font = 13 / Math.max(scale, 0.3);
+  return (
+    <g className="support-marks" pointerEvents="none">
+      {joints.map((j, i) => {
+        if (j.self) return <circle key={i} cx={j.x} cy={j.y} r={r * 0.55} fill="#94a3b8" stroke="#fff" strokeWidth={2 / scale} />;
+        const label = j.uses
+          ? Object.entries(j.uses)
+              .sort(([a], [b]) => (a === 'D1' ? 1 : b === 'D1' ? -1 : a.localeCompare(b)))
+              .map(([c, n]) => (n > 1 ? `${c}×${n}` : c))
+              .join(' + ')
+          : improvised
+            ? `L${j.level}: improvise`
+            : `L${j.level}: no support`;
+        const color = j.uses ? '#0284c7' : improvised ? '#d97706' : '#dc2626';
+        return (
+          <g key={i}>
+            <rect x={j.x - r} y={j.y - r} width={2 * r} height={2 * r} rx={r * 0.3} fill={color} stroke="#fff" strokeWidth={2 / scale} />
+            <text x={j.x} y={j.y} fontSize={r * 1.3} textAnchor="middle" dominantBaseline="central" fill="#fff" fontWeight={700}>
+              {j.uses ? j.level : '!'}
+            </text>
+            {labels && (
+              <text
+                x={j.x}
+                y={j.y + r + font * 0.9}
+                fontSize={font}
+                textAnchor="middle"
+                fill={color}
+                stroke="#fff"
+                strokeWidth={3 / scale}
+                paintOrder="stroke"
+                fontWeight={600}
+              >
+                {label}
+              </text>
+            )}
+          </g>
+        );
+      })}
+    </g>
   );
 }

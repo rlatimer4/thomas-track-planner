@@ -40,7 +40,8 @@ import {
   type PlacedPiece,
   type WorldPort,
 } from './layout';
-import { validateLayout, type Issue } from './validate';
+import { validateLayout, type Issue, type SupportJoint } from './validate';
+import { findClosure } from './closure';
 
 export type LayoutStyle = 'any' | 'loop' | 'figure8';
 
@@ -60,6 +61,17 @@ export interface AutoGenOptions {
   useAll?: boolean;
   /** Add as many loops as the switches allow: loops across the middle and passing loops, before sidings. */
   manyLoops?: boolean;
+  /**
+   * How extra track is added. 'classic' decorates the main loop with stations, passing loops and sidings.
+   * 'branching' grows forks anywhere in the layout and keeps one only when an exact track closes it back into the
+   * layout, so every fork forms a loop.
+   */
+  method?: 'classic' | 'branching';
+  /**
+   * Allow raised joints that the supports you own can't hold (you'll prop them up with something else). Without it,
+   * layouts needing more supports than you own are left out.
+   */
+  improvisedSupports?: boolean;
   /** Number of layouts to return. */
   results?: number;
   timeBudgetMs?: number;
@@ -76,6 +88,8 @@ export interface Candidate {
   width: number;
   depth: number;
   counts: Counts;
+  /** Every raised joint and what holds it up, for drawing. */
+  supports: SupportJoint[];
 }
 
 // ---------------------------------------------------------------- utilities
@@ -928,6 +942,113 @@ function addSecondLoop(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): bo
   return false;
 }
 
+// ---------------------------------------------------------------- branching (closes every fork)
+
+/** Straights anywhere in the layout (main loop or branches) that are level end to end. */
+function flatStraights(cat: Catalog, st: DecorState, pools: Pools): PlacedPiece[] {
+  return st.pieces.filter((p) => {
+    if (!pools.straight.includes(p.code)) return false;
+    const z = cat.get(p.code).ports.map((q) => q.z);
+    return z.every((v) => v === z[0]);
+  });
+}
+
+/**
+ * Close the open end `from` back into the layout: put a switch on some straight and find exact track from `from`
+ * to its branch. Returns the switch, the track and what's left, without changing `st`.
+ */
+function closeIntoLayout(
+  cat: Catalog,
+  st: DecorState,
+  pools: Pools,
+  rng: Rng,
+  from: WorldPort,
+  base: PlacedPiece[],
+  avail: Counts,
+  skip: Set<string>,
+): { sw: PlacedPiece; track: PlacedPiece[]; avail: Counts } | undefined {
+  const switches = [...SWITCH_RIGHT, ...SWITCH_LEFT].filter((c) => cat.has(c) && (avail[c] ?? 0) > 0);
+  if (!switches.length) return undefined;
+  const view: DecorState = { ...st, pieces: base };
+  for (const target of shuffle(
+    rng,
+    flatStraights(cat, view, pools).filter((q) => !skip.has(q.uid)),
+  ).slice(0, 6)) {
+    for (const code of shuffle(rng, switches).slice(0, 2)) {
+      for (const inPort of shuffle(rng, ['a', 'b'])) {
+        const sw = replaceInline(cat, view, target.uid, code, inPort);
+        const left = { ...avail, [target.code]: (avail[target.code] ?? 0) + 1 };
+        left[code]--;
+        const found = findClosure(cat, pools, from, piecePortPose(cat, sw, 'c'), left, { rng, hills: [0, 2], maxLevel: BUCKET_LEVEL })[0];
+        if (!found) continue;
+        for (const [c, n] of Object.entries(found.used)) left[c] -= n;
+        return { sw, track: found.pieces, avail: left };
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Fork off a straight with a switch and close the branch back into the layout: one more loop. */
+function addClosedFork(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): boolean {
+  const switches = [...SWITCH_RIGHT, ...SWITCH_LEFT].filter((c) => cat.has(c) && (st.avail[c] ?? 0) > 0);
+  if (!switches.length) return false;
+  for (const site of shuffle(rng, flatStraights(cat, st, pools)).slice(0, 5)) {
+    // spend the most plentiful switch, so the scarce hand stays for later
+    const code = rng() < 0.7 ? [...switches].sort((x, y) => (st.avail[y] ?? 0) - (st.avail[x] ?? 0))[0] : pick(rng, switches);
+    const fork = replaceInline(cat, st, site.uid, code, pick(rng, ['a', 'b']));
+    const avail = { ...st.avail, [site.code]: (st.avail[site.code] ?? 0) + 1 };
+    avail[code]--;
+    const base = withReplaced(st, [fork]);
+    const closed = closeIntoLayout(cat, st, pools, rng, piecePortPose(cat, fork, 'c'), base, avail, new Set([site.uid]));
+    if (!closed) continue;
+    const next = base.map((p) => (p.uid === closed.sw.uid ? closed.sw : p)).concat(closed.track);
+    const onGrade = (ps: PlacedPiece[]) => validateLayout(cat, ps).issues.filter((i) => i.rule === 'switch-on-grade').length;
+    if (onGrade(next) > onGrade(st.pieces) || !tryCommit(cat, st, next)) continue;
+    st.avail = closed.avail;
+    st.features.push('Loop closed from a fork');
+    return true;
+  }
+  return false;
+}
+
+/** The lid on a level-1 straight with both side forks closed: a balloon loop, or each fork into the layout. */
+function addClosedLid(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): boolean {
+  if (!cat.has('XB') || (st.avail.XB ?? 0) < 1) return false;
+  for (const site of shuffle(rng, loopStraights(cat, st, pools, 1)).slice(0, 4)) {
+    for (const inPort of shuffle(rng, ['a', 'b'])) {
+      const lid = replaceInline(cat, st, site.uid, 'XB', inPort);
+      const base = withReplaced(st, [lid]);
+      const avail = { ...st.avail, [site.code]: (st.avail[site.code] ?? 0) + 1 };
+      avail.XB--;
+      const fork = (port: string) => piecePortPose(cat, lid, port);
+      const balloon = findClosure(cat, pools, fork('c'), fork('d'), avail, { rng, hills: [0], maxLevel: BUCKET_LEVEL })[0];
+      if (balloon) {
+        const left = { ...avail };
+        for (const [c, n] of Object.entries(balloon.used)) left[c] -= n;
+        if (tryCommit(cat, st, [...base, ...balloon.pieces])) {
+          st.avail = left;
+          st.features.push('Balloon loop on the bucket lid');
+          return true;
+        }
+      }
+      const skip = new Set([site.uid]);
+      const first = closeIntoLayout(cat, st, pools, rng, fork('c'), base, avail, skip);
+      if (!first) continue;
+      const mid = base.map((p) => (p.uid === first.sw.uid ? first.sw : p)).concat(first.track);
+      skip.add(first.sw.uid);
+      const second = closeIntoLayout(cat, st, pools, rng, fork('d'), mid, first.avail, skip);
+      if (!second) continue;
+      const next = mid.map((p) => (p.uid === second.sw.uid ? second.sw : p)).concat(second.track);
+      if (!tryCommit(cat, st, next)) continue;
+      st.avail = second.avail;
+      st.features.push('Both bucket lid forks lead into the layout');
+      return true;
+    }
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------- scoring
 
 /**
@@ -1078,7 +1199,15 @@ export function countLoops(cat: Catalog, pieces: PlacedPiece[]): number {
   return Math.max(0, edges - joined.size + sections);
 }
 
-function scoreCandidate(cat: Catalog, pieces: PlacedPiece[], owned: Counts, features: string[], useAll = false, manyLoops = false) {
+function scoreCandidate(
+  cat: Catalog,
+  pieces: PlacedPiece[],
+  owned: Counts,
+  features: string[],
+  useAll = false,
+  manyLoops = false,
+  improvised = false,
+) {
   const W = SCORE_WEIGHTS;
   const v = validateLayout(cat, pieces, { owned });
   const trackOwned = Object.entries(owned).reduce((a, [c, n]) => a + (cat.has(c) && cat.get(c).isTrack ? n : 0), 0);
@@ -1107,11 +1236,23 @@ function scoreCandidate(cat: Catalog, pieces: PlacedPiece[], owned: Counts, feat
   breakdown['Warnings'] = -8 * warn;
   breakdown['Long climbs'] = -2 * steep;
   const unsupported = Object.values(v.supports.unsupported).reduce((a, b) => a + b, 0);
-  breakdown['Unsupported joints'] = -6 * unsupported;
+  // improvised supports are fine when asked for; otherwise the layout isn't offered at all (see the driver)
+  breakdown[improvised ? 'Improvised supports' : 'Unsupported joints'] = (improvised ? -2 : -6) * unsupported;
   const errors = v.issues.filter((i) => i.severity === 'error').length;
   breakdown['Errors'] = -100 * errors;
   const score = Object.values(breakdown).reduce((a, b) => a + b, 0);
-  return { score, breakdown, issues: v.issues, valid: errors === 0, crossings, used, trackOwned, loops };
+  return {
+    score,
+    breakdown,
+    issues: v.issues,
+    valid: errors === 0,
+    crossings,
+    used,
+    trackOwned,
+    loops,
+    unsupported,
+    joints: v.supports.joints,
+  };
 }
 
 function describe(word: TurnWord, features: string[], maxZ: number, crossings = 0, loops = 1): string {
@@ -1229,18 +1370,27 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
     if (opts.wantStation !== false && (always || opts.manyLoops || rng() < 0.8))
       addStation(cat, st, pools, rng, true) || addStation(cat, st, pools, rng, false);
     const many = !!opts.manyLoops;
-    if (many) {
+    if (opts.method === 'branching') {
+      // forks anywhere, each closed into a loop; the lid's forks closed too
+      const tries = many || always ? 8 : 4;
+      for (let i = 0, fails = 0; i < tries && fails < 2; i++) if (!addClosedFork(cat, st, pools, rng)) fails++;
+      addClosedLid(cat, st, pools, rng);
+      // deliberate dead ends only when asked to use everything
+      if (always) for (let i = 0; i < 3 && addSpur(cat, st, pools, rng); i++);
+    } else if (many) {
       // loops first, while there are switches for them
       // (passing loops on one side rarely close with 60-degree switches: their branch needs about 3.3 straights,
       // so the offset-switch double track above is the way to get one)
       for (let i = 0; i < 4 && addSecondLoop(cat, st, pools, rng); i++);
     } else if (opts.wantSidings !== false && (always || rng() < 0.35)) addSecondLoop(cat, st, pools, rng);
-    if (always || rng() < 0.5) addLidLoop(cat, st, pools, rng) || addLidFork(cat, st, pools, rng);
-    if (opts.wantSidings !== false) {
-      if (always || rng() < 0.6) addSiding(cat, st, pools, rng);
-      if (always || rng() < 0.7) addSpur(cat, st, pools, rng);
-      // using all the pieces: keep adding sidings while there's room for them
-      if (always) for (let i = 0; i < 3 && addSpur(cat, st, pools, rng); i++);
+    if (opts.method !== 'branching') {
+      if (always || rng() < 0.5) addLidLoop(cat, st, pools, rng) || addLidFork(cat, st, pools, rng);
+      if (opts.wantSidings !== false) {
+        if (always || rng() < 0.6) addSiding(cat, st, pools, rng);
+        if (always || rng() < 0.7) addSpur(cat, st, pools, rng);
+        // using all the pieces: keep adding sidings while there's room for them
+        if (always) for (let i = 0; i < 3 && addSpur(cat, st, pools, rng); i++);
+      }
     }
     // last, so it doesn't take a straight a station or siding needed
     if (always || rng() < 0.5) addBucketTunnel(cat, st, pools, rng);
@@ -1262,8 +1412,10 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
       b = layoutBounds(cat, pieces);
     }
 
-    const s = scoreCandidate(cat, pieces, owned, st.features, opts.useAll, opts.manyLoops);
+    const s = scoreCandidate(cat, pieces, owned, st.features, opts.useAll, opts.manyLoops, opts.improvisedSupports);
     if (!s.valid) continue;
+    // only what your supports can hold, unless improvising
+    if (s.unsupported > 0 && !opts.improvisedSupports) continue;
     const maxZ = trackMaxLevel(cat, pieces);
     const counts = pieceCounts(pieces, cat);
     const sig = `${canonical(word)}|${Object.entries(counts)
@@ -1279,6 +1431,7 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
       features: [
         `Uses ${s.used} of ${s.trackOwned} track pieces`,
         ...(s.loops > 1 ? [`${s.loops} loops`] : []),
+        ...(s.unsupported > 0 ? [`${s.unsupported} raised joint${s.unsupported > 1 ? 's' : ''} on improvised supports`] : []),
         // the same feature added more than once is listed once with a count
         ...[...new Set(st.features)].map((f) => {
           const n = st.features.filter((x) => x === f).length;
@@ -1289,6 +1442,7 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
         ...(s.crossings > 0 ? [`${s.crossings} bridge crossing${s.crossings > 1 ? 's' : ''}`] : []),
       ],
       breakdown: s.breakdown,
+      supports: s.joints,
       issues: s.issues,
       width: Math.round(b.width),
       depth: Math.round(b.height),

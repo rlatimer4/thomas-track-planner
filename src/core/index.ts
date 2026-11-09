@@ -12,3 +12,4 @@ export * from './operations';
 export * from './sharing';
 export * from './standards';
 export * from './pieces';
+export * from './closure';
