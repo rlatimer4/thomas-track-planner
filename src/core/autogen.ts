@@ -509,6 +509,12 @@ interface DecorState {
   order: string[];
   avail: Counts;
   features: string[];
+  /** When set, changes that need more supports than these owned pieces provide are refused. */
+  supportsOwned?: Counts;
+  /** Switches next to a ramp in the current pieces (so a change can be refused for adding one). */
+  onGrade?: number;
+  /** Track and body points of the current pieces, for a fast first check of new track. */
+  grid?: SampleGrid;
 }
 
 /** Level of the track on top of the bucket. */
@@ -624,11 +630,33 @@ function straightRuns(cat: Catalog, st: DecorState, pools: Pools): number[][] {
   return runs;
 }
 
-function tryCommit(cat: Catalog, st: DecorState, next: PlacedPiece[]): boolean {
-  const v = validateLayout(cat, next);
+/**
+ * Accept `next` as the layout if its shape is sound: no errors, open ends or misaligned joints; within the supports
+ * owned (when that's required); and, with `noNewGrade`, no more switches next to a ramp than before. One quick
+ * validation covers all of it.
+ */
+function tryCommit(cat: Catalog, st: DecorState, next: PlacedPiece[], noNewGrade = false): boolean {
+  // fast first check: new track mustn't run into what's already there (ignoring where it joins)
+  const prior = new Set(st.pieces.map((p) => p.uid));
+  const added = next.filter((p) => !prior.has(p.uid));
+  if (added.length) {
+    st.grid ??= gridOf(cat, st.pieces);
+    const changed = next.filter((p) => !added.includes(p) && st.pieces.find((q) => q.uid === p.uid) !== p);
+    const joints = [...added, ...changed].flatMap((p) => worldPorts(cat, p));
+    const gap = cat.params.trackWidth * 0.85;
+    if (added.some((p) => st.grid!.hits(worldSamples(cat, p).flat(), gap, cat.params.clearanceLevels, joints, cat.params.trackWidth))) {
+      return false;
+    }
+  }
+  const v = validateLayout(cat, next, { quick: true, owned: st.supportsOwned });
   const bad = v.issues.some((i) => i.severity === 'error' || i.rule === 'open-end' || i.rule === 'misaligned');
   if (bad) return false;
+  if (st.supportsOwned && Object.keys(v.supports.unsupported).length) return false;
+  const grade = v.issues.filter((i) => i.rule === 'switch-on-grade').length;
+  if (noNewGrade && grade > (st.onGrade ?? Infinity)) return false;
   st.pieces = next;
+  st.onGrade = grade;
+  st.grid = undefined;
   return true;
 }
 
@@ -933,8 +961,7 @@ function addSecondLoop(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): bo
     if (!link) continue;
     // don't put the new switches straight onto a ramp
     const next = [...base, ...link];
-    const onGrade = (ps: PlacedPiece[]) => validateLayout(cat, ps).issues.filter((i) => i.rule === 'switch-on-grade').length;
-    if (onGrade(next) > onGrade(st.pieces) || !tryCommit(cat, st, next)) continue;
+    if (!tryCommit(cat, st, next, true)) continue;
     st.avail = avail;
     st.features.push('Second loop through the middle');
     return true;
@@ -1003,8 +1030,7 @@ function addClosedFork(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): bo
     const closed = closeIntoLayout(cat, st, pools, rng, piecePortPose(cat, fork, 'c'), base, avail, new Set([site.uid]));
     if (!closed) continue;
     const next = base.map((p) => (p.uid === closed.sw.uid ? closed.sw : p)).concat(closed.track);
-    const onGrade = (ps: PlacedPiece[]) => validateLayout(cat, ps).issues.filter((i) => i.rule === 'switch-on-grade').length;
-    if (onGrade(next) > onGrade(st.pieces) || !tryCommit(cat, st, next)) continue;
+    if (!tryCommit(cat, st, next, true)) continue;
     st.avail = closed.avail;
     st.features.push('Loop closed from a fork');
     return true;
@@ -1314,9 +1340,12 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
   // the bucket's top tracks are at level 4: reachable with four pairs of ramps
   const canTopBucket = opts.wantElevation !== false && cat.has('BKT') && (owned.BKT ?? 0) > 0 && Math.floor(nRamp / 2) >= BUCKET_LEVEL;
 
+  // using everything climbs as high as it can, but only when supports can be improvised: with just the supports
+  // owned, every height is tried and the ones they can hold are kept
+  const climbAll = !!opts.useAll && !!opts.improvisedSupports;
   const results = new Map<string, Candidate>();
   let attempts = 0;
-  while (Date.now() - t0 < budgetMs && attempts < 20000) {
+  while (Date.now() - t0 < budgetMs && attempts < 1_000_000) {
     attempts++;
     // figure-8s give a bridge crossing, so offer them often when any shape is allowed
     // to use all the pieces, mostly try the longest loops (they use every curve)
@@ -1337,12 +1366,12 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
     const climbPairs = () => Math.max(randInt(rng, 1, maxPairs), randInt(rng, 1, maxPairs));
     if (net === 0) {
       if (maxPairs < 1) continue;
-      pairs = opts.useAll ? maxPairs : climbPairs();
+      pairs = climbAll ? maxPairs : climbPairs();
     } else if (opts.wantElevation !== false && maxPairs > 0 && (opts.useAll || rng() < (opts.manyLoops ? 0.4 : 0.85))) {
-      pairs = opts.useAll ? maxPairs : climbPairs();
+      pairs = climbAll ? maxPairs : climbPairs();
     }
     // sometimes climb to the bucket's top (level 4) to run over it
-    const toBucket = canTopBucket && (opts.useAll || rng() < 0.35);
+    const toBucket = canTopBucket && (climbAll || rng() < 0.35);
     if (toBucket) pairs = BUCKET_LEVEL;
     // curves the word needs beyond the climbing ones must be plain curves
     if (word.length - 2 * pairs > nCurves) continue;
@@ -1357,13 +1386,23 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
     if (!plan) continue;
     const built = buildLoop(cat, pools, plan, owned);
     if (!built) continue;
-    const base = validateLayout(cat, built.pieces);
+    // quick shape check, and (unless improvising) the bare loop must already fit the supports owned
+    const strict = opts.improvisedSupports ? undefined : owned;
+    const base = validateLayout(cat, built.pieces, { quick: true, owned: strict });
     if (base.issues.some((i) => i.severity === 'error' || i.rule === 'open-end')) continue;
+    if (strict && Object.keys(base.supports.unsupported).length) continue;
 
     // decorate
     const avail: Counts = { ...owned };
     for (const [c, n] of Object.entries(pieceCounts(built.pieces, cat))) avail[c] -= n;
-    const st: DecorState = { pieces: built.pieces, order: built.order, avail, features: [] };
+    const st: DecorState = {
+      pieces: built.pieces,
+      order: built.order,
+      avail,
+      features: [],
+      supportsOwned: strict,
+      onGrade: base.issues.filter((i) => i.rule === 'switch-on-grade').length,
+    };
     // a climb to level 4 was made for the bucket: put it there first
     if (toBucket && !addBucketTop(cat, st, pools, rng)) continue;
     const always = !!opts.useAll;

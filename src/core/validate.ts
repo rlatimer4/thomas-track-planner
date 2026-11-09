@@ -238,6 +238,11 @@ export interface ValidateOptions {
   owned?: Counts;
   /** Available floor/table space in mm; when given, the footprint is checked against it. */
   space?: { width: number; depth: number };
+  /**
+   * Skip how trains run (loops, reachability, conflicts…): only the shape checks (overlaps, heights, joints, open
+   * ends, supports, design rules). Much faster; used while building layouts automatically.
+   */
+  quick?: boolean;
 }
 
 export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: ValidateOptions = {}): ValidationResult {
@@ -396,9 +401,11 @@ export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: Valida
   }
 
   // ---- running analysis
-  const running = analyzeRunning(cat, pieces, conn);
+  const running: RunAnalysis = opts.quick
+    ? { canRunForever: new Set(), onCycle: new Set(), loopPieces: new Set(), hasReversingLoop: false, loopCount: 0 }
+    : analyzeRunning(cat, pieces, conn);
   const trackPieces = pieces.filter((p) => cat.get(p.code).isTrack);
-  if (trackPieces.length > 0 && running.onCycle.size === 0) {
+  if (!opts.quick && trackPieces.length > 0 && running.onCycle.size === 0) {
     issues.push(issue('no-loop', 'warning', 'There is no closed loop, so engines will always reach an end.', []));
   }
   if (running.onCycle.size > 0) {
@@ -419,7 +426,7 @@ export function validateLayout(cat: Catalog, pieces: PlacedPiece[], opts: Valida
   }
 
   // ---- how trains run: turning, reachability, conflicts, siding lengths, stops, disconnected track
-  issues.push(...operationalChecks(cat, pieces, conn));
+  if (!opts.quick) issues.push(...operationalChecks(cat, pieces, conn));
 
   // ---- footprint against the available space
   if (opts.space && trackPieces.length) {
