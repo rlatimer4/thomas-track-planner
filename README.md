@@ -135,7 +135,9 @@ has no "What's Included" list, the kit is counted from the labelled pieces in it
 3. **Decoration.** Straights on the finished loop are swapped for same-length pieces: offset-switch double track, the two-lane
    station, passing loops (switch pairs joined by a short search for connecting track) and sidings ending in buffer stops.
    It can also add:
-   - a **second loop**: switches on two different sides of the loop, joined by a track through the middle;
+   - a **second loop**: switches on two different sides of the loop, joined by a track through the middle. **Many loops**
+     builds a plain oval with long sides and adds as many of these as the switches allow (the station's double track is
+     a loop too); every result says how many loops it has, and each loop beyond the first adds to the score;
    - the **bucket lid** in place of a straight at level 1, as a raised 3-way fork whose side legs end in buffer stops;
    - the **bucket**, standing over a ground-level straight so trains run through its tunnel.
 4. **Checking and ranking.** Every candidate goes through the same validator as the builder and is scored. Interesting,

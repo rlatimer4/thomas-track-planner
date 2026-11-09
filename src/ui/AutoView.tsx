@@ -30,6 +30,7 @@ export function AutoView({ onOpen }: { onOpen: () => void }) {
   const [elevation, setElevation] = useState(true);
   const [station, setStation] = useState(true);
   const [useAll, setUseAll] = useState(false);
+  const [manyLoops, setManyLoops] = useState(false);
   const [seconds, setSeconds] = useState(3);
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<Candidate[] | null>(null);
@@ -51,6 +52,7 @@ export function AutoView({ onOpen }: { onOpen: () => void }) {
       wantElevation: elevation,
       wantStation: station,
       useAll,
+      manyLoops,
       maxWidth: limit ? parseLen(w, units) : undefined,
       maxDepth: limit ? parseLen(d, units) : undefined,
       results: 8,
@@ -98,6 +100,12 @@ export function AutoView({ onOpen }: { onOpen: () => void }) {
           </label>
           <label className="check">
             <input type="checkbox" checked={elevation} onChange={(e) => setElevation(e.target.checked)} /> Hills & bridges
+          </label>
+          <label
+            className="check"
+            title="Add as many loops as your switches allow: loops across the middle and the station's double track, built on a plain oval with long sides."
+          >
+            <input type="checkbox" checked={manyLoops} onChange={(e) => setManyLoops(e.target.checked)} /> Many loops
           </label>
           <label
             className="check"

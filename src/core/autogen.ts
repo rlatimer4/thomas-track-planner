@@ -56,6 +56,8 @@ export interface AutoGenOptions {
    * stations, passing loops and sidings as fit, with pieces used weighted much more heavily in the score.
    */
   useAll?: boolean;
+  /** Add as many loops as the switches allow: loops across the middle and passing loops, before sidings. */
+  manyLoops?: boolean;
   /** Number of layouts to return. */
   results?: number;
   timeBudgetMs?: number;
@@ -338,7 +340,7 @@ function planLoop(
   rng: Rng,
   word: TurnWord,
   g: LoopGeometry,
-  budget: { straight: number; rampsOwned: Record<number, number>; fill?: boolean },
+  budget: { straight: number; rampsOwned: Record<number, number>; fill?: boolean | 'long' },
   rampPairs: number,
 ): LoopPlan | undefined {
   const m = word.length;
@@ -384,6 +386,8 @@ function planLoop(
   for (const net of shuffle(rng, solutions).slice(0, 6)) {
     const s = Array(m).fill(0);
     let ok = true;
+    // for long runs, only one pair of opposite sides is lengthened (there aren't enough straights for all)
+    const longSide = randInt(rng, 0, half - 1);
     for (let k = 0; k < half && ok; k++) {
       // straights are 2 units long: 2*(sA - sB) = net_k
       if (net[k] % 2 !== 0) {
@@ -394,15 +398,33 @@ function planLoop(
       const A = runsOf(k);
       const B = runsOf(k + half);
       // extra straights on both sides keep the loop closed; filling uses more of them
-      const extra = A.length && B.length ? (budget.fill ? randInt(rng, 0, 3) : rng() < 0.5 ? 0 : randInt(rng, 0, 2)) : 0;
+      // long runs leave room for passing loops (a branch needs about 3 1/2 straights to swing out and back)
+      const extra =
+        A.length && B.length
+          ? budget.fill === 'long'
+            ? k === longSide
+              ? randInt(rng, 3, 5)
+              : 0
+            : budget.fill
+              ? randInt(rng, 0, 3)
+              : rng() < 0.5
+                ? 0
+                : randInt(rng, 0, 2)
+          : 0;
       let sA = Math.max(d, 0) + extra;
       let sB = Math.max(-d, 0) + extra;
       if ((sA > 0 && !A.length) || (sB > 0 && !B.length)) {
         ok = false;
         break;
       }
-      while (sA-- > 0) s[pick(rng, A)]++;
-      while (sB-- > 0) s[pick(rng, B)]++;
+      if (budget.fill === 'long') {
+        // keep each side's straights together in one long run
+        if (sA > 0) s[pick(rng, A)] += sA;
+        if (sB > 0) s[pick(rng, B)] += sB;
+      } else {
+        while (sA-- > 0) s[pick(rng, A)]++;
+        while (sB-- > 0) s[pick(rng, B)]++;
+      }
     }
     if (!ok) continue;
     if (s.reduce((a, b) => a + b, 0) > budget.straight) continue;
@@ -786,8 +808,10 @@ function addSecondLoop(cat: Catalog, st: DecorState, pools: Pools, rng: Rng): bo
     const [r1, r2] = shuffle(rng, runs).slice(0, 2);
     const uA = st.order[pick(rng, r1)];
     const uB = st.order[pick(rng, r2)];
-    const codeA = pick(rng, switches);
-    const codeB = pick(rng, switches);
+    // spend the most plentiful switches, so a left and a right stay for passing loops
+    const byStock = [...switches].sort((x, y) => (st.avail[y] ?? 0) - (st.avail[x] ?? 0));
+    const codeA = rng() < 0.75 ? byStock[0] : pick(rng, switches);
+    const codeB = rng() < 0.75 ? byStock[0] : pick(rng, switches);
     const avail = { ...st.avail };
     avail[codeA] = (avail[codeA] ?? 0) - 1;
     avail[codeB] = (avail[codeB] ?? 0) - 1;
@@ -894,6 +918,11 @@ export const SCORE_WEIGHTS = {
   piecesUsed: 60,
   /** The same, when asked to use all the pieces. */
   piecesUsedAll: 250,
+  /** Points for each loop beyond the first. */
+  perLoop: 15,
+  /** The same, when asked for many loops. */
+  perLoopMany: 40,
+  maxLoops: 4,
   continuousRunning: 20,
   perFeature: 8,
   perCrossing: 30,
@@ -905,7 +934,51 @@ export const SCORE_WEIGHTS = {
   maxCompactness: 45,
 } as const;
 
-function scoreCandidate(cat: Catalog, pieces: PlacedPiece[], owned: Counts, features: string[], useAll = false) {
+/**
+ * Independent loops in the track: joins minus junctions plus separate sections (the graph's cycle count). Each
+ * separate route through a piece is its own junction, so the station's two lanes or a crossing's two tracks don't
+ * join. A plain oval or figure-8 is 1; each passing loop, station double track or loop across the middle adds one.
+ */
+export function countLoops(cat: Catalog, pieces: PlacedPiece[]): number {
+  const track = pieces.filter((p) => cat.get(p.code).isTrack);
+  const conn = computeConnectivity(cat, track);
+  // node for each port: the piece plus the group of ports its routes join
+  const nodeOf = new Map<string, string>();
+  for (const p of track) {
+    const t = cat.get(p.code);
+    for (const port of t.ports) {
+      if (nodeOf.has(`${p.uid}:${port.id}`)) continue;
+      const stack = [port.id];
+      const seen = new Set(stack);
+      while (stack.length)
+        for (const next of t.routes[stack.pop()!] ?? [])
+          if (!seen.has(next)) {
+            seen.add(next);
+            stack.push(next);
+          }
+      seen.forEach((id) => nodeOf.set(`${p.uid}:${id}`, `${p.uid}#${port.id}`));
+    }
+  }
+  const parent = new Map<string, string>();
+  const find = (x: string): string => {
+    if (!parent.has(x)) parent.set(x, x);
+    while (parent.get(x) !== x) x = parent.get(x)!;
+    return x;
+  };
+  let edges = 0;
+  for (const [k, mate] of conn.links) {
+    const other = `${mate.uid}:${mate.port}`;
+    if (k > other) continue; // each join once
+    edges++;
+    parent.set(find(nodeOf.get(k)!), find(nodeOf.get(other)!));
+  }
+  // only junctions something is joined to (the bucket's unused top doesn't count)
+  const joined = new Set([...conn.links.keys()].map((k) => nodeOf.get(k)!));
+  const sections = new Set([...joined].map(find)).size;
+  return Math.max(0, edges - joined.size + sections);
+}
+
+function scoreCandidate(cat: Catalog, pieces: PlacedPiece[], owned: Counts, features: string[], useAll = false, manyLoops = false) {
   const W = SCORE_WEIGHTS;
   const v = validateLayout(cat, pieces, { owned });
   const trackOwned = Object.entries(owned).reduce((a, [c, n]) => a + (cat.has(c) && cat.get(c).isTrack ? n : 0), 0);
@@ -924,6 +997,8 @@ function scoreCandidate(cat: Catalog, pieces: PlacedPiece[], owned: Counts, feat
   const b = layoutBounds(cat, pieces);
   const coverage = (trackLength(cat, pieces) * cat.params.trackWidth) / Math.max(1, b.width * b.height);
   breakdown['Compact'] = Math.round(Math.min(W.maxCompactness, W.compactness * coverage));
+  const loops = countLoops(cat, pieces);
+  breakdown['Loops'] = (manyLoops ? W.perLoopMany : W.perLoop) * Math.min(Math.max(0, loops - 1), W.maxLoops);
   const rev = v.issues.filter((i) => i.rule === 'reverse-curve').length;
   breakdown['S-bends'] = -6 * rev;
   const warn = v.issues.filter((i) => i.severity === 'warning').length;
@@ -933,10 +1008,10 @@ function scoreCandidate(cat: Catalog, pieces: PlacedPiece[], owned: Counts, feat
   const errors = v.issues.filter((i) => i.severity === 'error').length;
   breakdown['Errors'] = -100 * errors;
   const score = Object.values(breakdown).reduce((a, b) => a + b, 0);
-  return { score, breakdown, issues: v.issues, valid: errors === 0, crossings, used, trackOwned };
+  return { score, breakdown, issues: v.issues, valid: errors === 0, crossings, used, trackOwned, loops };
 }
 
-function describe(word: TurnWord, features: string[], maxZ: number, crossings = 0): string {
+function describe(word: TurnWord, features: string[], maxZ: number, crossings = 0, loops = 1): string {
   const net = word.reduce((a, b) => a + b, 0);
   const hasLeft = word.some((t) => t < 0);
   let shape = net === 0 ? 'Figure-8' : hasLeft ? 'Bent loop' : 'Oval loop';
@@ -945,6 +1020,7 @@ function describe(word: TurnWord, features: string[], maxZ: number, crossings = 
   if (features.some((f) => f.includes('station'))) shape += ' + station';
   else if (features.some((f) => f.includes('Passing') || f.includes('Double'))) shape += ' + passing loop';
   if (features.some((f) => f.includes('Siding'))) shape += ' + siding';
+  if (loops >= 3) shape += ` (${loops} loops)`;
   return shape;
 }
 
@@ -988,6 +1064,8 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
   const fig8Words = allWords.filter((w) => w.reduce((a, b) => a + b, 0) === 0);
   const longest = Math.max(...allWords.map((w) => w.length));
   const longWords = allWords.filter((w) => w.length >= longest - 1);
+  // plain ovals (and figure-8s) with few curves leave long straight sides for passing loops and cross-overs
+  const ovalWords = allWords.filter((w) => w.length <= perCircle + 2 && directionChanges(w) <= 2);
 
   const results = new Map<string, Candidate>();
   let attempts = 0;
@@ -995,7 +1073,14 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
     attempts++;
     // figure-8s give a bridge crossing, so offer them often when any shape is allowed
     // to use all the pieces, mostly try the longest loops (they use every curve)
-    const pool = opts.useAll && rng() < 0.7 ? longWords : style === 'any' && fig8Words.length && rng() < 0.4 ? fig8Words : allWords;
+    const pool =
+      opts.manyLoops && ovalWords.length && rng() < 0.7
+        ? ovalWords
+        : opts.useAll && rng() < 0.7
+          ? longWords
+          : style === 'any' && fig8Words.length && rng() < 0.4
+            ? fig8Words
+            : allWords;
     const word = pick(rng, pool);
     const net = word.reduce((a, b) => a + b, 0);
     // figure-8s need a raised crossing; loops get a hill sometimes when asked
@@ -1006,12 +1091,12 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
     if (net === 0) {
       if (maxPairs < 1) continue;
       pairs = opts.useAll ? maxPairs : climbPairs();
-    } else if (opts.wantElevation !== false && maxPairs > 0 && (opts.useAll || rng() < 0.85)) {
+    } else if (opts.wantElevation !== false && maxPairs > 0 && (opts.useAll || rng() < (opts.manyLoops ? 0.4 : 0.85))) {
       pairs = opts.useAll ? maxPairs : climbPairs();
     }
     // curves the word needs beyond the climbing ones must be plain curves
     if (word.length - 2 * pairs > nCurves) continue;
-    const plan = planLoop(rng, word, geom, { straight: nStraight, rampsOwned, fill: opts.useAll }, pairs);
+    const plan = planLoop(rng, word, geom, { straight: nStraight, rampsOwned, fill: opts.manyLoops ? 'long' : opts.useAll }, pairs);
     if (!plan) continue;
     const built = buildLoop(cat, pools, plan, owned);
     if (!built) continue;
@@ -1023,9 +1108,15 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
     for (const [c, n] of Object.entries(pieceCounts(built.pieces, cat))) avail[c] -= n;
     const st: DecorState = { pieces: built.pieces, order: built.order, avail, features: [] };
     const always = !!opts.useAll;
-    if (opts.wantStation !== false && (always || rng() < 0.8))
+    if (opts.wantStation !== false && (always || opts.manyLoops || rng() < 0.8))
       addStation(cat, st, pools, rng, true) || addStation(cat, st, pools, rng, false);
-    if (opts.wantSidings !== false && (always || rng() < 0.35)) addSecondLoop(cat, st, pools, rng);
+    const many = !!opts.manyLoops;
+    if (many) {
+      // loops first, while there are switches for them
+      // (passing loops on one side rarely close with 60-degree switches: their branch needs about 3.3 straights,
+      // so the offset-switch double track above is the way to get one)
+      for (let i = 0; i < 4 && addSecondLoop(cat, st, pools, rng); i++);
+    } else if (opts.wantSidings !== false && (always || rng() < 0.35)) addSecondLoop(cat, st, pools, rng);
     if (always || rng() < 0.5) addLidFork(cat, st, pools, rng);
     if (opts.wantSidings !== false) {
       if (always || rng() < 0.6) addSiding(cat, st, pools, rng);
@@ -1053,7 +1144,7 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
       b = layoutBounds(cat, pieces);
     }
 
-    const s = scoreCandidate(cat, pieces, owned, st.features, opts.useAll);
+    const s = scoreCandidate(cat, pieces, owned, st.features, opts.useAll, opts.manyLoops);
     if (!s.valid) continue;
     const maxZ = Math.max(0, ...pieces.map((p) => p.z + Math.max(...cat.get(p.code).ports.map((q) => q.z))));
     const counts = pieceCounts(pieces, cat);
@@ -1064,12 +1155,17 @@ export function generateLayouts(cat: Catalog, opts: AutoGenOptions): Candidate[]
     const prev = results.get(sig);
     if (prev && prev.score >= s.score) continue;
     results.set(sig, {
-      name: describe(word, st.features, maxZ, s.crossings),
+      name: describe(word, st.features, maxZ, s.crossings, s.loops),
       pieces,
       score: s.score,
       features: [
         `Uses ${s.used} of ${s.trackOwned} track pieces`,
-        ...st.features,
+        ...(s.loops > 1 ? [`${s.loops} loops`] : []),
+        // the same feature added more than once is listed once with a count
+        ...[...new Set(st.features)].map((f) => {
+          const n = st.features.filter((x) => x === f).length;
+          return n > 1 ? `${f} (×${n})` : f;
+        }),
         ...(maxZ > 0 ? [`Raised to level ${maxZ}`] : []),
         ...(net === 0 ? ['Crosses over itself'] : []),
         ...(s.crossings > 0 ? [`${s.crossings} bridge crossing${s.crossings > 1 ? 's' : ''}`] : []),

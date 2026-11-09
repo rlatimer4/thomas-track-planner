@@ -21,6 +21,7 @@ import {
   attachPose,
   closingWords,
   computeConnectivity,
+  countLoops,
   drawOrder,
   generateLayouts,
   inventoryTotals,
@@ -647,6 +648,28 @@ describe('autogen', () => {
     const features = res.flatMap((c) => c.features);
     const uses = (code: string) => res.some((c) => c.pieces.some((p) => p.code === code));
     expect(uses('BKT') || uses('XB') || features.includes('Second loop through the middle')).toBe(true);
+    for (const c of res) expect(c.issues.filter((i) => i.severity === 'error')).toEqual([]);
+  }, 20000);
+
+  it('counts independent loops, treating separate routes through one piece separately', () => {
+    expect(countLoops(cat, oval())).toBe(1);
+    // an oval with an offset-switch double-track section is 2 loops
+    const ring = placeChain(cat, startPose(), [step('PR'), S, step('PL', 'rev'), R, R, R, S, S, S, R, R, R]).pieces;
+    const lane = placeChain(
+      cat,
+      worldPorts(cat, ring[0]).find((p) => p.port === 'c')!,
+      [S],
+    ).pieces;
+    const all = [...ring, ...lane];
+    expect(validateLayout(cat, all).issues.filter((i) => i.rule === 'open-end')).toEqual([]);
+    expect(countLoops(cat, all)).toBe(2);
+  });
+
+  it('builds layouts with several loops when asked for many loops', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const res = generateLayouts(cat, { owned, timeBudgetMs: 3000, seed: 1, results: 4, manyLoops: true });
+    expect(res.length).toBeGreaterThan(0);
+    expect(Math.max(...res.map((c) => countLoops(cat, c.pieces)))).toBeGreaterThanOrEqual(3);
     for (const c of res) expect(c.issues.filter((i) => i.severity === 'error')).toEqual([]);
   }, 20000);
 
