@@ -138,8 +138,10 @@ has no "What's Included" list, the kit is counted from the labelled pieces in it
    - a **second loop**: switches on two different sides of the loop, joined by a track through the middle. **Many loops**
      builds a plain oval with long sides and adds as many of these as the switches allow (the station's double track is
      a loop too); every result says how many loops it has, and each loop beyond the first adds to the score;
-   - the **bucket lid** in place of a straight at level 1, as a raised 3-way fork whose side legs end in buffer stops;
-   - the **bucket**, standing over a ground-level straight so trains run through its tunnel.
+   - the **bucket lid** in place of a straight at level 1, with its side forks as track: a balloon loop joining its left
+     and right forks, or one fork running to a switch on another level-1 straight. Failing that, its legs end in buffers;
+   - the **bucket**: when you own it and enough ramps, the loop sometimes climbs steadily to level 4 and runs over one of
+     its top tracks. Otherwise it stands over a ground-level straight so trains run through its tunnel.
 4. **Checking and ranking.** Every candidate goes through the same validator as the builder and is scored. Interesting,
    compact layouts rank highest:
    - **Bridge crossings** score most: 30 points for each place track passes over other track with enough headroom (up to 3).
@@ -150,7 +152,7 @@ has no "What's Included" list, the kit is counted from the labelled pieces in it
      straights, every climb, a second loop, the bucket and lid, and as many sidings and passing loops as fit. Usually not
      every piece can be placed: everything hangs off one main loop, and some pieces only fit particular spots.
    - Continuous running and features (station, sidings, passing loops) add to it. S-bends, warnings and unsupported joints
-     count against it.
+     count against it. A long climb (ramps back to back, as the bucket sets climb) costs only 2 points.
 
    Figure-8s and hills are tried often so there are plenty to choose from. Results are de-duplicated, and the shapes are
    varied. Hover a result's score to see its breakdown. The weights are `SCORE_WEIGHTS` in `src/core/autogen.ts`.

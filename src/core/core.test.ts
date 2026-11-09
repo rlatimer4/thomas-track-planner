@@ -642,6 +642,23 @@ describe('autogen', () => {
     expect(avg(true)).toBeGreaterThan(avg(false));
   }, 20000);
 
+  it('climbs to level 4 and runs over the top of the bucket, and uses the lid forks as track', () => {
+    const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
+    const res = generateLayouts(cat, { owned, timeBudgetMs: 3000, seed: 1, results: 8, useAll: true });
+    const features = res.flatMap((c) => c.features);
+    expect(features).toContain('Runs over the top of the track bucket');
+    expect(features.some((f) => /Balloon loop on the bucket lid|Second loop from the bucket lid fork/.test(f))).toBe(true);
+    for (const c of res) {
+      expect(c.issues.filter((i) => i.severity === 'error')).toEqual([]);
+      // over the bucket means a bucket top track is joined at both ends
+      if (c.features.includes('Runs over the top of the track bucket')) {
+        const b = c.pieces.find((p) => p.code === 'BKT')!;
+        const conn = computeConnectivity(cat, c.pieces);
+        expect(['a', 'b', 'c', 'd'].filter((q) => conn.links.has(`${b.uid}:${q}`))).toHaveLength(2);
+      }
+    }
+  }, 20000);
+
   it('can use the bucket, the lid and a second loop', () => {
     const owned = inventoryTotals({ kits: { GLK80: 1, HNP81: 1 }, loose: {} }, BUILTIN_KITS);
     const res = generateLayouts(cat, { owned, timeBudgetMs: 3000, seed: 2, results: 8, useAll: true });
