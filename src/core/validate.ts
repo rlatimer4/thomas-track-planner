@@ -32,6 +32,18 @@ export interface SupportPlan {
   used: Counts;
   /** Joints that could not be supported with owned pieces, by level. */
   unsupported: Record<number, number>;
+  /** Every raised joint and what holds it up, for drawing. */
+  joints: SupportJoint[];
+}
+
+export interface SupportJoint {
+  x: number;
+  y: number;
+  level: number;
+  /** Held by a piece that stands on its own (the bucket, the lid, AR1's rock base, the bridge). */
+  self?: boolean;
+  /** Support pieces placed under this joint, when the plan found some. */
+  uses?: Counts;
 }
 
 export interface ValidationResult {
@@ -107,6 +119,7 @@ const issue = (rule: string, severity: Severity, message: string, uids: string[]
 export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connectivity, owned?: Counts): SupportPlan {
   const byUid = new Map(pieces.map((p) => [p.uid, p]));
   const needed: Record<number, number> = {};
+  const joints: SupportJoint[] = [];
   const seen = new Set<string>();
   for (const port of conn.ports) {
     const k = portKey(port);
@@ -122,8 +135,13 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
       return !!t.selfSupporting || !!t.supportedPorts?.includes(portId);
     };
     const selfSupported = holds(port.uid, port.port) || holds(mate?.uid, mate?.port);
-    if (selfSupported) continue;
+    if (selfSupported) {
+      // only joints track actually uses (not the bucket's unused top)
+      if (mate) joints.push({ x: port.x, y: port.y, level, self: true });
+      continue;
+    }
     needed[level] = (needed[level] ?? 0) + 1;
+    joints.push({ x: port.x, y: port.y, level });
   }
   // supports that hold several joints (the bridge holds both ends of a straight) count once per joint
   const held = (code: string) => (cat.has(code) ? (cat.get(code).jointsHeld ?? 1) : 1);
@@ -134,7 +152,7 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
   const levels = Object.keys(needed)
     .map(Number)
     .sort((x, y) => y - x);
-  if (!owned) return { needed, used, unsupported };
+  if (!owned) return { needed, used, unsupported, joints };
 
   // Supports stack: a column of support pieces whose levels add up to the joint's level.
   // Paired supports (RS1/RS2/RS3) stack, and need two columns plus a D1 deck. Piers (RR1) stand alone
@@ -184,6 +202,7 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
   const size = (c: Counts) => Object.values(c).reduce((x, y) => x + y, 0);
 
   for (const level of levels) {
+    const atLevel = joints.filter((j) => !j.self && j.level === level);
     for (let i = 0; i < needed[level]; i++) {
       const options: Counts[] = [];
       const one = column(single, avail, level);
@@ -207,10 +226,11 @@ export function planSupports(cat: Catalog, pieces: PlacedPiece[], conn: Connecti
         avail[c] -= n;
         usedJoints[c] = (usedJoints[c] ?? 0) + n;
       }
+      atLevel[i].uses = choice;
     }
   }
   for (const [c, n] of Object.entries(usedJoints)) used[c] = Math.ceil(n / held(c));
-  return { needed, used, unsupported };
+  return { needed, used, unsupported, joints };
 }
 
 export interface ValidateOptions {

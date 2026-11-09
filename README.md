@@ -40,7 +40,9 @@ The **Checks** panel updates as you build. Hover or tap a check to highlight the
 | Doesn't fit your space | The layout is bigger than the space set in Settings (it says if turning it 90° would fit) |
 | Shortages, supports, S-bends, switches on ramps, long climbs, dead-end sections | Pieces and supports you don't have, and track design rules |
 
-**Parts** shows a bill of materials, including the supports needed for raised track. **Footprint** draws the area the layout
+**Parts** shows a bill of materials, including the supports needed for raised track. With **Supports** ticked, each
+raised joint is marked on the canvas: blue with the supports placed under it (for example `RS2×2 + D1` or `RR1`), a grey
+dot if a piece holds it up itself (the lid, the bucket, AR1's rock base), or red if none of your supports can hold it. **Footprint** draws the area the layout
 covers with its width and depth, next to your space if you've set one. The exported SVG includes the footprint too.
 
 Layouts and inventory are saved automatically on the device. **Export/Import** moves layouts as `.track.json` files, and **SVG**

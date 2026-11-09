@@ -22,6 +22,7 @@ import {
   type Layout,
   type PlacedPiece,
   type PieceType,
+  type SupportJoint,
   type WorldPort,
 } from '../core';
 import { useStore, fmtLen } from './store';
@@ -56,6 +57,7 @@ export function Builder() {
   const [view, setView] = useState<View>({ tx: 300, ty: 250, s: 0.5 });
   const [labels, setLabels] = useState(true);
   const [showFootprint, setShowFootprint] = useState(false);
+  const [showSupports, setShowSupports] = useState(true);
   const [onlyOwned, setOnlyOwned] = useState(true);
   const [panel, setPanel] = useState<'issues' | 'parts' | null>(typeof window !== 'undefined' && window.innerWidth > 900 ? 'issues' : null);
   const [focusIssue, setFocusIssue] = useState<Issue | null>(null);
@@ -589,6 +591,9 @@ export function Builder() {
         <label className="check">
           <input type="checkbox" checked={showFootprint} onChange={(e) => setShowFootprint(e.target.checked)} /> Footprint
         </label>
+        <label className="check" title="Show which supports go under each raised joint">
+          <input type="checkbox" checked={showSupports} onChange={(e) => setShowSupports(e.target.checked)} /> Supports
+        </label>
         <span className="sep" />
         <button onClick={exportJson}>Export</button>
         <button onClick={importJson}>Import</button>
@@ -665,6 +670,7 @@ export function Builder() {
                   onPointerDown={onPieceDown}
                 />
               ))}
+              {showSupports && <SupportMarks joints={validation.supports.joints} scale={view.s} />}
               {openPorts.map((p) => {
                 const isSel = selectedPort && p.uid === selectedPort.uid && p.port === selectedPort.port;
                 const d = dirVec(p.dir);
@@ -939,5 +945,46 @@ function PartsList({
         </>
       )}
     </div>
+  );
+}
+
+/** Marker under each raised joint: the supports placed there, a grey dot if it holds itself up, red if unsupported. */
+function SupportMarks({ joints, scale }: { joints: SupportJoint[]; scale: number }) {
+  const r = 9 / Math.max(scale, 0.3);
+  const font = 13 / Math.max(scale, 0.3);
+  return (
+    <g className="support-marks" pointerEvents="none">
+      {joints.map((j, i) => {
+        if (j.self) return <circle key={i} cx={j.x} cy={j.y} r={r * 0.55} fill="#94a3b8" stroke="#fff" strokeWidth={2 / scale} />;
+        const label = j.uses
+          ? Object.entries(j.uses)
+              .sort(([a], [b]) => (a === 'D1' ? 1 : b === 'D1' ? -1 : a.localeCompare(b)))
+              .map(([c, n]) => (n > 1 ? `${c}×${n}` : c))
+              .join(' + ')
+          : `L${j.level}: no support`;
+        const color = j.uses ? '#0284c7' : '#dc2626';
+        return (
+          <g key={i}>
+            <rect x={j.x - r} y={j.y - r} width={2 * r} height={2 * r} rx={r * 0.3} fill={color} stroke="#fff" strokeWidth={2 / scale} />
+            <text x={j.x} y={j.y} fontSize={r * 1.3} textAnchor="middle" dominantBaseline="central" fill="#fff" fontWeight={700}>
+              {j.uses ? j.level : '!'}
+            </text>
+            <text
+              x={j.x}
+              y={j.y + r + font * 0.9}
+              fontSize={font}
+              textAnchor="middle"
+              fill={color}
+              stroke="#fff"
+              strokeWidth={3 / scale}
+              paintOrder="stroke"
+              fontWeight={600}
+            >
+              {label}
+            </text>
+          </g>
+        );
+      })}
+    </g>
   );
 }

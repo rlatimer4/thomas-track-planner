@@ -293,6 +293,21 @@ describe('elevation', () => {
     expect(overlaps(placeChain(cat, startPose(S1 / 4, -S1, 90, 2), [S, S]).pieces)).toBe(true);
   });
 
+  it('records what holds up each raised joint, for drawing', () => {
+    // a straight one level up on two piers: each end has an RR1 under it
+    const span = placeChain(cat, startPose(0, 0, 0, 1), [S]).pieces;
+    const v = validateLayout(cat, span, { owned: { S1: 1, RR1: 2 } });
+    expect(v.supports.joints).toHaveLength(2);
+    for (const j of v.supports.joints) expect(j).toMatchObject({ level: 1, uses: { RR1: 1 } });
+    // with no supports owned the joints are still listed, without a support
+    const none = validateLayout(cat, span, { owned: { S1: 1 } });
+    expect(none.supports.joints.every((j) => !j.uses && !j.self)).toBe(true);
+    // AR1's rock base holds its own top joint
+    const rock = placeChain(cat, startPose(), [step('AR1'), S]).pieces;
+    const rv = validateLayout(cat, rock, { owned: { AR1: 1, S1: 1, RR1: 1 } });
+    expect(rv.supports.joints.filter((j) => j.self)).toHaveLength(1);
+  });
+
   it('supports of each height are matched to raised joints', () => {
     const { pieces } = placeChain(cat, startPose(), [step('AR'), S, step('AL'), S, step('AR'), S]);
     const v = validateLayout(cat, pieces, { owned: { AR: 2, AL: 1, S1: 3, RR1: 2, RS2: 2, RS3: 2, D1: 2 } });
